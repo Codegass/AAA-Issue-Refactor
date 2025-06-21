@@ -8,3 +8,16 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Claude
+CLAUDE.md
+.env
+.DS_Store
+uv.lock
+
+example_data_for_testing/
+.claude/
+.pytest_cache/
+.vscode/
+.idea/
+

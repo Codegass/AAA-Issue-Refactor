@@ -1,7 +1,27 @@
 [project]
 name = "aaa-issue-refactor"
 version = "0.1.0"
-description = "Add your description here"
+description = "Python CLI tool for automatically refactoring Java test cases using LLMs to eliminate AAA pattern violations"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "openai>=1.0.0",
+    "python-dotenv>=1.0.0",
+    "pytest>=7.0.0",
+    "pandas>=2.0.0",
+    "tqdm>=4.0.0"
+]
+
+[project.scripts]
+aif = "src.cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.uv]
+package = true
