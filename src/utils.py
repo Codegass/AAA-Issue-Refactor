@@ -255,36 +255,36 @@ class AutoUpdater:
         if not self.is_git_repository():
             return False, "Not a git repository"
         
-        logger.info(f"检查GitHub更新... (从 {self.remote_url})")
+        logger.info(f"Checking GitHub updates... (from {self.remote_url})")
         
         current_commit = self.get_current_commit()
         if not current_commit:
-            return False, "无法获取当前commit信息"
+            return False, "Cannot get current commit information"
         
         remote_commit = self.get_remote_commit(branch, remote_name)
         if not remote_commit:
-            return False, "无法获取远程commit信息，可能网络连接有问题"
+            return False, "Cannot get remote commit information, possibly network connection issues"
         
         if current_commit == remote_commit:
-            logger.info("✓ 当前已是最新版本")
+            logger.info("✓ Current version is up to date")
             return True, "Already up to date"
         
-        logger.info(f"发现新版本，准备更新... (当前: {current_commit[:8]}, 最新: {remote_commit[:8]})")
+        logger.info(f"New version found, preparing update... (current: {current_commit[:8]}, latest: {remote_commit[:8]})")
         
         # Check for local changes
         if not force and self.has_local_changes():
-            logger.warning("⚠ 检测到本地修改，跳过自动更新")
-            logger.warning("请先提交或撤销本地修改，或使用 --force-update 强制更新")
+            logger.warning("⚠ Local changes detected, skipping automatic update")
+            logger.warning("Please commit or revert local changes, or use --force-update to force update")
             return False, "Local changes detected, skipping update"
         
         # Perform the update
         success, output = self.pull_latest(branch, remote_name)
         if success:
-            logger.info("✓ 更新成功！")
-            logger.info("重新启动程序以使用最新版本...")
+            logger.info("✓ Update successful!")
+            logger.info("Restarting program to use latest version...")
             return True, "Update successful"
         else:
-            logger.error(f"✗ 更新失败: {output}")
+            logger.error(f"✗ Update failed: {output}")
             return False, f"Update failed: {output}"
 
 def check_and_auto_update(force: bool = False) -> bool:
@@ -302,7 +302,7 @@ def check_and_auto_update(force: bool = False) -> bool:
     
     if success and "Update successful" in message:
         # Restart the program after successful update
-        logger.info("正在重新启动程序...")
+        logger.info("Restarting program...")
         python = sys.executable
         subprocess.Popen([python] + sys.argv)
         sys.exit(0)

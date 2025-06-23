@@ -14,6 +14,17 @@ class CodeValidator:
     def __init__(self, java_project_path: Path):
         self.java_project_path = java_project_path
     
+    def _detect_build_system(self) -> str:
+        """Detect the build system used by the project."""
+        if (self.java_project_path / "pom.xml").exists():
+            return "Maven"
+        elif (self.java_project_path / "build.gradle").exists():
+            return "Gradle (build.gradle)"
+        elif (self.java_project_path / "build.gradle.kts").exists():
+            return "Gradle (build.gradle.kts)"
+        else:
+            return "Unknown (no pom.xml or build.gradle found)"
+    
     def integrate_refactored_method(
         self,
         test_file_path: Path,
@@ -222,51 +233,67 @@ class CodeValidator:
         return -1
     
     def compile_java_project(self) -> Tuple[bool, str]:
-        """Compile the Java project to check for syntax errors."""
+        """Compile and install the Java project to handle multi-module dependencies."""
+        debug_logger = logging.getLogger('aif')
+        build_system = self._detect_build_system()
+        
+        if debug_logger.isEnabledFor(logging.DEBUG):
+            debug_logger.debug(f"Starting project build and install...")
+            debug_logger.debug(f"Project path: {self.java_project_path}")
+            debug_logger.debug(f"Detected build system: {build_system}")
+        
         try:
+            command = []
             # Try Maven first
             if (self.java_project_path / "pom.xml").exists():
+                # Use 'install' to build all modules and place them in the local Maven repo.
+                # This is crucial for multi-module projects to resolve inter-module dependencies.
+                command = [
+                    "mvn", "clean", "install", 
+                    "-DskipTests=true",                   # Don't run tests, just build and install
+                    "-Drat.skip=true",                    # Skip Apache RAT checks
+                    "-Dmaven.javadoc.skip=true",          # Skip javadoc generation  
+                    "-Dcheckstyle.skip=true",             # Skip checkstyle
+                    "-Dpmd.skip=true",                    # Skip PMD
+                    "-Dspotbugs.skip=true",               # Skip SpotBugs
+                    "-Denforcer.skip=true",               # Skip enforcer rules
+                    "-Djacoco.skip=true",                 # Skip code coverage
+                    "-Dossindex.skip=true",               # Skip ossindex security audit
+                    "-Derrorprone.skip=true",             # Skip Google errorprone checks
+                    "-Dspotless.skip=true",               # Skip spotless formatting
+                    "-Dlicense.skip=true",                # Skip license checks
+                    "-Dforbiddenapis.skip=true",          # Skip forbidden APIs check
+                    "-Danimal.sniffer.skip=true",         # Skip animal sniffer
+                    "-Dmaven.compiler.failOnError=false", # Don't fail on compilation errors
+                    "-Dmaven.compiler.failOnWarning=false", # Don't fail on warnings
+                    "-T", "1C",                           # Use 1 thread per CPU core for faster builds
+                    "-q"                                  # Quiet mode to reduce output noise
+                ]
+                
+                if debug_logger.isEnabledFor(logging.DEBUG):
+                    debug_logger.debug(f"Using Maven command: {' '.join(command)}")
+                
                 result = subprocess.run(
-                    ["mvn", "clean", "compile", "test-compile", "-Drat.skip=true"],
+                    command,
                     cwd=self.java_project_path,
                     capture_output=True,
                     text=True,
-                    timeout=300
+                    timeout=600  # Increase timeout for large projects
                 )
+                
+                if debug_logger.isEnabledFor(logging.DEBUG):
+                    debug_logger.debug(f"Maven exit code: {result.returncode}")
+                    debug_logger.debug(f"Maven stdout:\n{result.stdout}")
+                    debug_logger.debug(f"Maven stderr:\n{result.stderr}")
+                
                 return result.returncode == 0, result.stderr
             
             # Try Gradle
             elif (self.java_project_path / "build.gradle").exists() or (self.java_project_path / "build.gradle.kts").exists():
-                result = subprocess.run(
-                    ["./gradlew", "clean", "compileJava", "compileTestJava"],
-                    cwd=self.java_project_path,
-                    capture_output=True,
-                    text=True,
-                    timeout=300
-                )
-                return result.returncode == 0, result.stderr
-            
-            else:
-                return False, "No Maven pom.xml or Gradle build file found"
+                command = ["./gradlew", "clean", "compileJava", "compileTestJava"]
+                if debug_logger.isEnabledFor(logging.DEBUG):
+                    debug_logger.debug(f"Using Gradle command: {' '.join(command)}")
                 
-        except subprocess.TimeoutExpired:
-            return False, "Compilation timeout"
-        except Exception as e:
-            return False, f"Compilation error: {str(e)}"
-    
-    def run_specific_test(self, test_class: str, test_method: str) -> Tuple[bool, str]:
-        """Run a specific test method."""
-        try:
-            # Try Maven first
-            if (self.java_project_path / "pom.xml").exists():
-                test_spec = f"{test_class}#{test_method}"
-                command = [
-                    "mvn", "surefire:test", 
-                    f"-Dtest={test_spec}", 
-                    "-DfailIfNoTests=false",
-                    "-Dmaven.test.failure.ignore=true",
-                    "-Drat.skip=true"
-                ]
                 result = subprocess.run(
                     command,
                     cwd=self.java_project_path,
@@ -275,7 +302,90 @@ class CodeValidator:
                     timeout=300
                 )
                 
+                if debug_logger.isEnabledFor(logging.DEBUG):
+                    debug_logger.debug(f"Gradle exit code: {result.returncode}")
+                    debug_logger.debug(f"Gradle stdout:\n{result.stdout}")
+                    debug_logger.debug(f"Gradle stderr:\n{result.stderr}")
+                
+                return result.returncode == 0, result.stderr
+            
+            else:
+                error_msg = "No Maven pom.xml or Gradle build file found"
+                if debug_logger.isEnabledFor(logging.DEBUG):
+                    debug_logger.debug(f"Build system detection failed: {error_msg}")
+                return False, error_msg
+                
+        except subprocess.TimeoutExpired:
+            error_msg = "Compilation timeout"
+            if debug_logger.isEnabledFor(logging.DEBUG):
+                debug_logger.debug(f"Build process timed out after 300 seconds")
+                debug_logger.debug(f"Command that timed out: {' '.join(command) if command else 'N/A'}")
+            return False, error_msg
+        except Exception as e:
+            error_msg = f"Compilation error: {str(e)}"
+            if debug_logger.isEnabledFor(logging.DEBUG):
+                debug_logger.debug(f"Build process exception: {str(e)}")
+                debug_logger.debug(f"Command that failed: {' '.join(command) if command else 'N/A'}")
+            return False, error_msg
+    
+    def run_specific_test(self, test_class: str, test_method: str, test_file_path: Optional[Path] = None) -> Tuple[bool, str]:
+        """Run a specific test method. For multi-module projects, runs from the module directory."""
+        debug_logger = logging.getLogger('aif')
+        
+        if debug_logger.isEnabledFor(logging.DEBUG):
+            debug_logger.debug(f"Running test: {test_class}.{test_method}")
+            debug_logger.debug(f"Project path: {self.java_project_path}")
+            if test_file_path:
+                debug_logger.debug(f"Test file path: {test_file_path}")
+        
+        # Determine the working directory for test execution
+        working_dir = self.java_project_path
+        if test_file_path:
+            # For multi-module projects, find the module root containing the test
+            module_root = self._find_module_root(test_file_path)
+            if module_root and module_root != self.java_project_path:
+                working_dir = module_root
+                if debug_logger.isEnabledFor(logging.DEBUG):
+                    debug_logger.debug(f"Using module directory for test execution: {working_dir}")
+        
+        try:
+            command = []
+            # Try Maven first
+            if (working_dir / "pom.xml").exists():
+                test_spec = f"{test_class}#{test_method}"
+                command = [
+                    "mvn", "surefire:test", 
+                    f"-Dtest={test_spec}", 
+                    "-DfailIfNoTests=false",
+                    "-Dmaven.test.failure.ignore=true",
+                    "-Drat.skip=true",
+                    "-Dossindex.skip=true",
+                    "-Derrorprone.skip=true",
+                    "-Dspotless.skip=true",
+                    "-Dlicense.skip=true",
+                    "-Dforbiddenapis.skip=true",
+                    "-Danimal.sniffer.skip=true",
+                    "-Dmaven.compiler.failOnError=false",
+                    "-Dmaven.compiler.failOnWarning=false"
+                ]
+                
+                if debug_logger.isEnabledFor(logging.DEBUG):
+                    debug_logger.debug(f"Using Maven test command in {working_dir}: {' '.join(command)}")
+                
+                result = subprocess.run(
+                    command,
+                    cwd=working_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=300
+                )
+                
                 output = result.stdout + result.stderr
+                
+                if debug_logger.isEnabledFor(logging.DEBUG):
+                    debug_logger.debug(f"Maven test exit code: {result.returncode}")
+                    debug_logger.debug(f"Maven test output:\n{output}")
+                
                 # A successful BUILD is the first gate. Real pass/fail is checked next.
                 if "BUILD SUCCESS" not in output:
                     return False, output
@@ -285,27 +395,70 @@ class CodeValidator:
                 match = re.search(r'Tests run: (\d+), Failures: (\d+), Errors: (\d+)', output)
                 if match:
                     runs, failures, errors = map(int, match.groups())
+                    if debug_logger.isEnabledFor(logging.DEBUG):
+                        debug_logger.debug(f"Test results: {runs} runs, {failures} failures, {errors} errors")
                     if runs > 0 and failures == 0 and errors == 0:
                         return True, output  # Test ran and passed
 
                 return False, output # Test failed, had errors, or did not run
             
-            # Try Gradle
-            elif (self.java_project_path / "build.gradle").exists() or (self.java_project_path / "build.gradle.kts").exists():
+            # Try Gradle (check in working directory)
+            elif (working_dir / "build.gradle").exists() or (working_dir / "build.gradle.kts").exists():
                 test_spec = f"{test_class}.{test_method}"
+                command = ["./gradlew", "test", f"--tests", test_spec]
+                
+                if debug_logger.isEnabledFor(logging.DEBUG):
+                    debug_logger.debug(f"Using Gradle test command in {working_dir}: {' '.join(command)}")
+                
                 result = subprocess.run(
-                    ["./gradlew", "test", f"--tests", test_spec],
-                    cwd=self.java_project_path,
+                    command,
+                    cwd=working_dir,
                     capture_output=True,
                     text=True,
                     timeout=300
                 )
-                return result.returncode == 0, result.stdout + result.stderr
+                
+                output = result.stdout + result.stderr
+                
+                if debug_logger.isEnabledFor(logging.DEBUG):
+                    debug_logger.debug(f"Gradle test exit code: {result.returncode}")
+                    debug_logger.debug(f"Gradle test output:\n{output}")
+                
+                return result.returncode == 0, output
             
             else:
-                return False, "No Maven pom.xml or Gradle build file found"
+                error_msg = f"No Maven pom.xml or Gradle build file found in working directory: {working_dir}"
+                if debug_logger.isEnabledFor(logging.DEBUG):
+                    debug_logger.debug(f"Test execution failed: {error_msg}")
+                return False, error_msg
                 
         except subprocess.TimeoutExpired:
-            return False, "Test execution timeout"
+            error_msg = "Test execution timeout"
+            if debug_logger.isEnabledFor(logging.DEBUG):
+                debug_logger.debug(f"Test execution timed out after 300 seconds")
+                debug_logger.debug(f"Command that timed out: {' '.join(command) if command else 'N/A'}")
+            return False, error_msg
         except Exception as e:
-            return False, f"Test execution error: {str(e)}"
+            error_msg = f"Test execution error: {str(e)}"
+            if debug_logger.isEnabledFor(logging.DEBUG):
+                debug_logger.debug(f"Test execution exception: {str(e)}")
+                debug_logger.debug(f"Command that failed: {' '.join(command) if command else 'N/A'}")
+            return False, error_msg
+    
+    def _find_module_root(self, test_file_path: Path) -> Optional[Path]:
+        """Find the Maven/Gradle module root directory containing the test file."""
+        current_dir = test_file_path.parent
+        
+        # Walk up the directory tree looking for pom.xml or build.gradle
+        while current_dir != current_dir.parent:  # Stop at filesystem root
+            # Check for Maven module
+            if (current_dir / "pom.xml").exists():
+                return current_dir
+            
+            # Check for Gradle module  
+            if (current_dir / "build.gradle").exists() or (current_dir / "build.gradle.kts").exists():
+                return current_dir
+            
+            current_dir = current_dir.parent
+        
+        return None

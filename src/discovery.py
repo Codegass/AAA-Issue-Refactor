@@ -54,21 +54,55 @@ class TestDiscovery:
         return test_cases
     
     def find_test_file(self, test_class_name: str) -> Optional[Path]:
-        """Find the Java test file for a given test class."""
+        """Find the Java test file for a given test class, supporting multi-module projects."""
         # Convert fully qualified class name to file path
-        class_path = test_class_name.replace('.', '/') + '.java'
+        class_path_parts = test_class_name.split('.')
+        class_file_name = class_path_parts[-1] + '.java'
+        full_class_path = '/'.join(class_path_parts) + '.java'
         
-        # Search in common test directories
+        # Strategy 1: Direct search using glob pattern for the exact file name
+        # This is faster and works for most cases
+        for pattern in [f"**/*/{class_file_name}", f"**/src/test/java/**/{class_file_name}"]:
+            matching_files = list(self.java_project_path.glob(pattern))
+            
+            # Filter to find exact matches based on package structure
+            for file_path in matching_files:
+                # Check if the file path matches the expected package structure
+                file_path_str = str(file_path)
+                if full_class_path in file_path_str:
+                    logger.debug(f"Found test file using pattern '{pattern}': {file_path}")
+                    return file_path
+            
+            # If no exact match, try the first match (fallback)
+            if matching_files:
+                logger.debug(f"Using first match from pattern '{pattern}': {matching_files[0]}")
+                return matching_files[0]
+        
+        # Strategy 2: Traditional directory-based search (legacy support)
+        # Search in common test directories at project root
         test_dirs = ['src/test/java', 'test', 'tests']
         
         for test_dir in test_dirs:
-            test_file = self.java_project_path / test_dir / class_path
+            test_file = self.java_project_path / test_dir / full_class_path
             if test_file.exists():
+                logger.debug(f"Found test file in root directory: {test_file}")
                 return test_file
         
+        # Strategy 3: Recursive search in all subdirectories (for complex project structures)
+        logger.debug(f"Performing recursive search for class: {test_class_name}")
+        
+        # Search for any file with the class name in test directories
+        for test_dir_pattern in ["**/src/test/java", "**/test", "**/tests"]:
+            test_dirs = list(self.java_project_path.glob(test_dir_pattern))
+            for test_dir in test_dirs:
+                if test_dir.is_dir():
+                    potential_file = test_dir / full_class_path
+                    if potential_file.exists():
+                        logger.debug(f"Found test file in subdirectory: {potential_file}")
+                        return potential_file
+        
+        logger.debug(f"Test file not found for class: {test_class_name}")
         return None
-    
-
     
     def count_lines_of_code(self, file_path: Path, method_name: str) -> int:
         """Count lines of code for a specific test method."""
@@ -109,13 +143,26 @@ class TestDiscovery:
         logger.info("Performing initial project build...")
         compile_success, compile_output = validator.compile_java_project()
         if not compile_success:
-            logger.error("Initial project build failed. Aborting validation.")
-            logger.error(f"Build output:\n{compile_output}")
-            for tc in test_cases:
-                tc.runable = "no"
-                tc.pass_status = "initial_build_failure"
-            return test_cases
-        logger.info("✓ Initial project build successful.")
+            logger.warning("Initial project build failed. Continuing with file discovery only.")
+            logger.warning(f"Build output:\n{compile_output}")
+            
+            # In debug mode, provide more detailed build failure information
+            debug_logger = logging.getLogger('aif')
+            if debug_logger.isEnabledFor(logging.DEBUG):
+                logger.debug("=" * 60)
+                logger.debug("DETAILED BUILD FAILURE ANALYSIS")
+                logger.debug("=" * 60)
+                logger.debug(f"Project path: {self.java_project_path}")
+                logger.debug(f"Build system detected: {validator._detect_build_system()}")
+                logger.debug(f"Full build output:\n{compile_output}")
+                logger.debug("=" * 60)
+            
+            # Continue with file discovery even if build fails
+            logger.info("⚠ Build failed, but will still attempt to find test files for inspection")
+            build_failed = True
+        else:
+            logger.info("✓ Initial project build successful.")
+            build_failed = False
 
         # Define a worker function for each thread
         def _validate_worker(test_case: TestCase) -> TestCase:
@@ -124,29 +171,38 @@ class TestDiscovery:
                 test_case.test_path = str(test_file)
                 test_case.test_case_loc = self.count_lines_of_code(test_file, test_case.test_method_name)
                 
-                # Assume runnable, will be confirmed by test execution
-                test_case.runable = "yes"
-                
-                # Execute test
-                test_success, test_output = validator.run_specific_test(
-                    test_case.test_class_name, 
-                    test_case.test_method_name
-                )
-                
-                # Categorize test results
-                if test_success:
-                    test_case.pass_status = "pass"
-                elif "COMPILATION ERROR" in test_output or "cannot find symbol" in test_output:
-                    test_case.pass_status = "compilation_error"
-                elif "BUILD FAILURE" in test_output:
-                    test_case.pass_status = "build_failure" 
+                if build_failed:
+                    # If build failed, mark as non-runnable but note that file exists
+                    test_case.runable = "no"
+                    test_case.pass_status = "build_failure"
                 else:
-                    test_case.pass_status = "fail"
+                    # Assume runnable, will be confirmed by test execution
+                    test_case.runable = "yes"
+                    
+                    # Execute test only if build was successful
+                    test_success, test_output = validator.run_specific_test(
+                        test_case.test_class_name, 
+                        test_case.test_method_name,
+                        test_file  # Pass the test file path for module detection
+                    )
+                    
+                    # Categorize test results
+                    if test_success:
+                        test_case.pass_status = "pass"
+                    elif "COMPILATION ERROR" in test_output or "cannot find symbol" in test_output:
+                        test_case.pass_status = "compilation_error"
+                    elif "BUILD FAILURE" in test_output:
+                        test_case.pass_status = "build_failure" 
+                    else:
+                        test_case.pass_status = "fail"
             else:
                 test_case.test_path = "not found"
                 test_case.test_case_loc = 0
                 test_case.runable = "no"
-                test_case.pass_status = "not_found"
+                if build_failed:
+                    test_case.pass_status = "file_not_found_build_failure"
+                else:
+                    test_case.pass_status = "not_found"
             return test_case
 
         validated_cases = []
@@ -172,6 +228,16 @@ class TestDiscovery:
                     # Mark as failed if an exception occurs
                     case.pass_status = "validation_error"
                     validated_cases.append(case)
+        
+        # Report findings
+        found_files = sum(1 for tc in validated_cases if tc.test_path != "not found")
+        runnable_cases = sum(1 for tc in validated_cases if tc.runable == "yes")
+        
+        if build_failed:
+            logger.info(f"Found test files: {found_files}/{len(validated_cases)}")
+            logger.info(f"Note: All tests marked as non-runnable due to build failure")
+        else:
+            logger.info(f"Runnable test cases: {runnable_cases}/{len(validated_cases)}")
         
         return sorted(validated_cases, key=lambda tc: test_cases.index(tc))
     

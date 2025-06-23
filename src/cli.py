@@ -150,7 +150,7 @@ def refactoring_phase(test_cases: List[TestCase], java_project_path: Path,
                 else:
                     logger.info("  Refactoring...")
                     refactoring_result = refactor.refactor_test_case(test_case, rftype=rftype, debug_mode=debug_mode)
-                    
+
                 if refactoring_result.success:
                     logger.info(f"  ✓ Refactoring successful ({refactoring_result.iterations} iterations)")
                 else:
@@ -276,7 +276,7 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
                 logger.info(f"  Running refactored test(s): {', '.join(refactored_methods)}")
                 all_passed = True
                 for method in refactored_methods:
-                    passed, output = validator.run_specific_test(row['test_class_name'], method)
+                    passed, output = validator.run_specific_test(row['test_class_name'], method, test_path)
                     if not passed:
                         all_passed = False
                         logger.warning(f"  - Method '{method}' FAILED.")
@@ -729,8 +729,8 @@ Examples:
             try:
                 check_and_auto_update(force=args.force_update)
             except Exception as e:
-                logger.warning(f"自动更新检查失败: {e}")
-                logger.info("继续执行程序...")
+                logger.warning(f"Autoupdate failed: {e}")
+                logger.info("Continue on the program...")
 
         logger.info(f"Java Project: {java_path}")
         logger.info(f"Data Folder: {data_path}")
