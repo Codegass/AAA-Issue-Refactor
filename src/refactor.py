@@ -11,6 +11,7 @@ import logging
 from .llm_client import LLMClient
 from .discovery import TestCase
 from .sanitizer import Sanitizer
+from .usage_tracker import UsageTracker
 
 logger = logging.getLogger('aif')
 
@@ -137,11 +138,20 @@ class PromptManager:
 class TestRefactor:
     """Main test refactoring orchestrator."""
     
-    def __init__(self, prompts_dir: Path, data_folder_path: Path, rftype: str):
-        self.prompt_manager = PromptManager(prompts_dir / f"v1-{rftype}")
+    # Strategy to prompt directory mapping
+    STRATEGY_PROMPT_MAPPING = {
+        'aaa': 'v1-aaa',
+        'dsl': 'v2-dsl-aaa', 
+        'testsmell': 'v3-testsmell'
+    }
+    
+    def __init__(self, prompts_dir: Path, data_folder_path: Path, rftype: str, output_path: Path = None):
+        prompt_subdir = self.STRATEGY_PROMPT_MAPPING.get(rftype, f"v1-{rftype}")
+        self.prompt_manager = PromptManager(prompts_dir / prompt_subdir)
         self.data_folder_path = data_folder_path
         self.llm_client = LLMClient()
         self.sanitizer = Sanitizer()
+        self.usage_tracker = UsageTracker(output_path) if output_path else None
     
     def load_test_context(self, project_name: str, test_class: str, test_method: str) -> TestContext:
         """Load test context from JSON file."""
@@ -304,13 +314,14 @@ class TestRefactor:
             # Default to True for safety (assume issue exists if unclear)
             return True
     
-    def refactor_test_case(self, test_case: TestCase, debug_mode: bool = False, max_refinement_loops: int = 5) -> RefactoringResult:
+    def refactor_test_case(self, test_case: TestCase, rftype: str = "", debug_mode: bool = False, max_refinement_loops: int = 5) -> RefactoringResult:
         """
         Refactors a single test case using a two-loop process.
         - Outer loop: Validation-driven refinement (max 5 iterations).
         - Inner loop: Code sanitization to get a clean response (max 3 retries).
         """
         start_time = time.time()
+        usage_start_time = self.usage_tracker.start_timing() if self.usage_tracker else start_time
         
         try:
             context = self.load_test_context(
@@ -368,9 +379,28 @@ class TestRefactor:
                         time.sleep(1)
 
                 if not sanitized_code:
+                    error_msg = f"Failed to get a clean response from LLM after {max_sanitizer_retries} attempts."
+                    usage_stats = self.llm_client.get_usage_stats()
+                    
+                    # Record usage statistics for sanitizer failure
+                    if self.usage_tracker:
+                        self.usage_tracker.record_usage(
+                            project=test_case.project_name,
+                            test_class=test_case.test_class_name,
+                            test_case=test_case.test_method_name,
+                            cost=usage_stats["total_cost"],
+                            start_time=usage_start_time,
+                            refactoring_loops=loop_num + 1,
+                            strategy=rftype,
+                            tokens_used=usage_stats["total_tokens"],
+                            success=False,
+                            error_message=error_msg
+                        )
+                    
                     return RefactoringResult(
-                        success=False, error_message=f"Failed to get a clean response from LLM after {max_sanitizer_retries} attempts.",
-                        iterations=loop_num + 1, processing_time=time.time() - start_time
+                        success=False, error_message=error_msg,
+                        iterations=loop_num + 1, processing_time=time.time() - start_time,
+                        tokens_used=usage_stats["total_tokens"], cost=usage_stats["total_cost"]
                     )
                 
                 # --- End of inner sanitizer loop. We now have good, sanitized code. ---
@@ -392,6 +422,21 @@ class TestRefactor:
                 if not validation_result["original_issue_exists"] and not validation_result["new_issue_exists"]:
                     logger.info("  ✓ Validation successful. Refactoring complete.")
                     usage_stats = self.llm_client.get_usage_stats()
+                    
+                    # Record usage statistics
+                    if self.usage_tracker:
+                        self.usage_tracker.record_usage(
+                            project=test_case.project_name,
+                            test_class=test_case.test_class_name,
+                            test_case=test_case.test_method_name,
+                            cost=usage_stats["total_cost"],
+                            start_time=usage_start_time,
+                            refactoring_loops=loop_num + 1,
+                            strategy=rftype,
+                            tokens_used=usage_stats["total_tokens"],
+                            success=True
+                        )
+                    
                     return RefactoringResult(
                         success=True,
                         refactored_code=sanitized_code,
@@ -414,8 +459,25 @@ class TestRefactor:
             
             # Max outer loops reached without success
             usage_stats = self.llm_client.get_usage_stats()
+            error_msg = f"Maximum refinement loops ({max_refinement_loops}) reached without success."
+            
+            # Record usage statistics for failure
+            if self.usage_tracker:
+                self.usage_tracker.record_usage(
+                    project=test_case.project_name,
+                    test_class=test_case.test_class_name,
+                    test_case=test_case.test_method_name,
+                    cost=usage_stats["total_cost"],
+                    start_time=usage_start_time,
+                    refactoring_loops=max_refinement_loops,
+                    strategy=rftype,
+                    tokens_used=usage_stats["total_tokens"],
+                    success=False,
+                    error_message=error_msg
+                )
+            
             return RefactoringResult(
-                success=False, error_message=f"Maximum refinement loops ({max_refinement_loops}) reached without success.",
+                success=False, error_message=error_msg,
                 iterations=max_refinement_loops, chat_history=json.dumps(refactoring_session_messages, indent=2),
                 tokens_used=usage_stats["total_tokens"], cost=usage_stats["total_cost"],
                 processing_time=time.time() - start_time
@@ -424,8 +486,25 @@ class TestRefactor:
         except Exception as e:
             logger.error(f"  ✗ An unexpected error occurred during refactoring: {e}", exc_info=debug_mode)
             usage_stats = self.llm_client.get_usage_stats()
+            error_msg = str(e)
+            
+            # Record usage statistics for exception
+            if self.usage_tracker:
+                self.usage_tracker.record_usage(
+                    project=test_case.project_name,
+                    test_class=test_case.test_class_name,
+                    test_case=test_case.test_method_name,
+                    cost=usage_stats["total_cost"],
+                    start_time=usage_start_time,
+                    refactoring_loops=0,
+                    strategy=rftype,
+                    tokens_used=usage_stats["total_tokens"],
+                    success=False,
+                    error_message=error_msg
+                )
+            
             return RefactoringResult(
-                success=False, error_message=str(e),
+                success=False, error_message=error_msg,
                 iterations=0, # Or pass loop_num if you can
                 tokens_used=usage_stats["total_tokens"], cost=usage_stats["total_cost"],
                 processing_time=time.time() - start_time

@@ -88,14 +88,14 @@ def load_test_cases_from_csv(input_file: Path) -> List[TestCase]:
 
 
 def refactoring_phase(test_cases: List[TestCase], java_project_path: Path,
-                      data_folder_path: Path, output_path: Path, rftype: str,
+                     data_folder_path: Path, output_path: Path, rftype: str,
                       debug_mode: bool = False) -> None:
     """Phase 2: Test Refactoring. Generates code but does not execute it."""
     logger.info(f"\nPhase 2: Test Refactoring ({rftype.upper()} strategy)")
     logger.info("=" * 50)
 
     prompts_dir = Path(__file__).resolve().parent.parent / "prompts"
-    refactor = TestRefactor(prompts_dir, data_folder_path, rftype)
+    refactor = TestRefactor(prompts_dir, data_folder_path, rftype, output_path)
     recorder = ResultsRecorder(output_path)
 
     runnable_cases = [tc for tc in test_cases if tc.runable == "yes"]
@@ -107,48 +107,59 @@ def refactoring_phase(test_cases: List[TestCase], java_project_path: Path,
     if runnable_cases:
         project_name = runnable_cases[0].project_name
 
-    for i, test_case in enumerate(runnable_cases, 1):
-        logger.info(f"\n[{i}/{len(runnable_cases)}] Processing: {test_case.test_class_name}.{test_case.test_method_name}")
-        logger.info(f"Issue Type: {test_case.issue_type}")
+        for i, test_case in enumerate(runnable_cases, 1):
+            logger.info(f"\n[{i}/{len(runnable_cases)}] Processing: {test_case.test_class_name}.{test_case.test_method_name}")
+            logger.info(f"Issue Type: {test_case.issue_type}")
 
-        original_code = ""
-        original_imports = []
-        try:
-            context = refactor.load_test_context(
-                test_case.project_name, test_case.test_class_name, test_case.test_method_name
-            )
-            original_code = context.test_case_source_code
-            original_imports = context.imported_packages
-
-            if test_case.issue_type.lower().strip() == 'good aaa':
-                logger.info("  ✓ Skipping: No refactoring needed.")
-                refactoring_result = RefactoringResult(
-                    success=True, refactored_code=original_code, error_message="Skipped: Good AAA"
+            original_code = ""
+            original_imports = []
+            try:
+                context = refactor.load_test_context(
+                    test_case.project_name, test_case.test_class_name, test_case.test_method_name
                 )
-            else:
-                logger.info("  Refactoring...")
-                refactoring_result = refactor.refactor_test_case(test_case, debug_mode=debug_mode)
-                if refactoring_result.success:
-                    logger.info(f"  ✓ Refactoring successful ({refactoring_result.iterations} iterations)")
+                original_code = context.test_case_source_code
+                original_imports = context.imported_packages
+
+                if test_case.issue_type.lower().strip() == 'good aaa':
+                    logger.info("  ✓ Skipping: No refactoring needed.")
+                    refactoring_result = RefactoringResult(
+                        success=True, refactored_code=original_code, error_message="Skipped: Good AAA"
+                    )
                 else:
-                    logger.error(f"  ✗ Refactoring failed: {refactoring_result.error_message}")
+                    logger.info("  Refactoring...")
+                    refactoring_result = refactor.refactor_test_case(test_case, rftype=rftype, debug_mode=debug_mode)
+                    if refactoring_result.success:
+                        logger.info(f"  ✓ Refactoring successful ({refactoring_result.iterations} iterations)")
+                    else:
+                        logger.error(f"  ✗ Refactoring failed: {refactoring_result.error_message}")
 
-            result_record = recorder.create_result_record(
-                test_case, original_code, original_imports, refactoring_result, rftype
-            )
-            results.append(result_record)
+                result_record = recorder.create_result_record(
+                    test_case, original_code, original_imports, refactoring_result, rftype
+                )
+                results.append(result_record)
 
-        except Exception as e:
-            logger.error(f"  ✗ Error processing test case: {str(e)}", exc_info=debug_mode)
-            error_result = RefactoringResult(success=False, error_message=str(e))
-            result_record = recorder.create_result_record(
-                test_case, original_code, original_imports, error_result, rftype
-            )
-            results.append(result_record)
+            except Exception as e:
+                logger.error(f"  ✗ Error processing test case: {str(e)}", exc_info=debug_mode)
+                error_result = RefactoringResult(success=False, error_message=str(e))
+                result_record = recorder.create_result_record(
+                    test_case, original_code, original_imports, error_result, rftype
+                )
+                results.append(result_record)
 
     if results:
         output_file = recorder.save_results(project_name, rftype, results)
         logger.info(f"\n✓ Refactoring results for '{rftype}' strategy saved to {output_file}")
+        
+        # Save usage statistics
+        if refactor.usage_tracker:
+            usage_file = refactor.usage_tracker.save_usage_statistics(project_name)
+            if usage_file:
+                logger.info(f"✓ Usage statistics saved to {usage_file}")
+                # Log summary
+                stats = refactor.usage_tracker.get_summary_stats()
+                if stats:
+                    logger.info(f"✓ Summary: {stats['successful_cases']}/{stats['total_cases']} successful, "
+                               f"${stats['total_cost']:.4f} total cost, {stats['total_time']:.2f}s total time")
 
 
 def execution_test_phase(java_project_path: Path, output_path: Path, 
@@ -156,6 +167,10 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
     """Phase 3: Execution Testing. Integrates and tests all refactored code."""
     logger.info("\nPhase 3: Execution Testing")
     logger.info("=" * 50)
+    
+    # Clean any existing refactored code before starting
+    logger.info("Cleaning any existing refactored code before execution testing...")
+    clean_refactored_phase(java_project_path, debug_mode)
     
     # Discover project name from result files
     result_files = list(output_path.glob("*_refactored_result.csv"))
@@ -207,9 +222,12 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
                 
                 # Integrate the code
                 is_one_to_many = row['issue_type'].lower().strip() == "multiple aaa"
+                # Parse additional imports, filtering out empty strings
+                imports_str = row[f'{prefix}_refactored_test_case_imports']
+                additional_imports = [imp.strip() for imp in imports_str.split(',') if imp.strip()] if imports_str else []
                 success, modified_content, _ = validator.integrate_refactored_method(
                     test_path, row['test_method_name'], row[code_col], strategy,
-                    row[f'{prefix}_refactored_test_case_imports'].split(','), is_one_to_many,
+                    additional_imports, is_one_to_many,
                     debug_mode=debug_mode
                 )
                 
@@ -257,11 +275,281 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
         backup_mgr.cleanup()
 
 
+def _extract_method_names_from_code(code: str) -> List[str]:
+    """Extract all test method names from Java code."""
+    import re
+    # Find all @Test annotated methods
+    pattern = re.compile(r'@Test\s+[^}]*?void\s+([a-zA-Z_]\w*)\s*\(', re.MULTILINE | re.DOTALL)
+    return pattern.findall(code)
+
+def _rename_methods_if_needed(code: str, original_method_name: str, strategy: str, existing_methods: set) -> str:
+    """Rename methods in code if they conflict with existing methods."""
+    import re
+    method_names = _extract_method_names_from_code(code)
+    
+    for method_name in method_names:
+        if method_name in existing_methods or method_name == original_method_name:
+            # Add strategy suffix
+            new_name = f"{method_name}_{strategy}_refactored"
+            # Replace method name in code
+            pattern = re.compile(rf'\bvoid\s+{re.escape(method_name)}\s*\(')
+            code = pattern.sub(f'void {new_name}(', code)
+            logger.info(f"    Renamed {method_name} → {new_name}")
+    
+    return code
+
+def show_refactored_phase(java_project_path: Path, output_path: Path, debug_mode: bool = False) -> None:
+    """Generate review-friendly Java files with refactored methods organized by strategy."""
+    logger.info("\nGenerate Review-Friendly Refactored Code")
+    logger.info("=" * 50)
+    
+    # Find refactored results file
+    result_files = list(output_path.glob("*_refactored_result.csv"))
+    if not result_files:
+        logger.warning("No refactoring result files found. Please run refactoring phase first.")
+        return
+    
+    project_name = result_files[0].stem.replace("_refactored_result", "")
+    results_file = result_files[0]
+    logger.info(f"Found results file for project '{project_name}': {results_file}")
+
+    df = pd.read_csv(results_file)
+    df.fillna('', inplace=True)
+    
+    validator = CodeValidator(java_project_path)
+    backup_mgr = BackupManager()
+    recorder = ResultsRecorder(output_path)
+
+    # Group by test file to process efficiently
+    file_groups = df.groupby('test_path')
+    
+    for test_file_path_str, group_df in file_groups:
+        test_file_path = Path(test_file_path_str)
+        if not test_file_path.exists():
+            logger.warning(f"Test file not found: {test_file_path}")
+            continue
+            
+        logger.info(f"\nProcessing file: {test_file_path.name}")
+        
+        # Backup original file
+        backup_mgr.backup([test_file_path])
+        
+        try:
+            # Read original content
+            original_content = test_file_path.read_text(encoding='utf-8')
+            modified_content = original_content
+            
+            # Extract existing method names to avoid conflicts
+            existing_methods = set(_extract_method_names_from_code(original_content))
+            
+            # Process each test method in this file
+            for _, row in group_df.iterrows():
+                method_name = row['test_method_name']
+                logger.info(f"  Processing method: {method_name}")
+                
+                # Collect all successful refactorings for this method
+                refactorings = []
+                for strategy in recorder.STRATEGY_MAPPING.keys():
+                    prefix = recorder.STRATEGY_MAPPING[strategy]
+                    code_col = f'{prefix}_refactored_test_case_code'
+                    error_col = f'{prefix}_refactoring_error'
+                    imports_col = f'{prefix}_refactored_test_case_imports'
+                    
+                    if code_col in row and row[code_col] and not row[error_col]:
+                        imports_str = row[imports_col]
+                        additional_imports = [imp.strip() for imp in imports_str.split(',') if imp.strip()] if imports_str else []
+                        
+                        # Rename methods if they conflict with existing ones
+                        refactored_code = _rename_methods_if_needed(
+                            row[code_col], method_name, strategy, existing_methods
+                        )
+                        
+                        refactorings.append({
+                            'strategy': strategy,
+                            'code': refactored_code,
+                            'imports': additional_imports,
+                            'issue_type': row['issue_type']
+                        })
+                        
+                        # Update existing methods set to track new methods
+                        new_methods = _extract_method_names_from_code(refactored_code)
+                        existing_methods.update(new_methods)
+                
+                if not refactorings:
+                    logger.info(f"    No successful refactorings found for {method_name}")
+                    continue
+                
+                # Add imports for all refactorings
+                all_imports = []
+                for ref in refactorings:
+                    all_imports.extend(ref['imports'])
+                
+                if all_imports:
+                    modified_content, _ = validator._add_imports(modified_content, all_imports)
+                
+                # Add refactored methods grouped by strategy (DO NOT comment out original)
+                lines = modified_content.split('\n')
+                insertion_line = validator._find_class_closing_brace(lines)
+                
+                if insertion_line == -1:
+                    logger.error(f"    Could not find class closing brace")
+                    continue
+                
+                # Create comprehensive comment block
+                header_comment = f"""
+/*
+ * ================================================================================
+ * REFACTORED METHODS FOR: {method_name}
+ * Original Issue Type: {refactorings[0]['issue_type']}
+ * Generated by AAA Issue Refactor Tool
+ * ================================================================================
+ */"""
+                
+                code_blocks = [header_comment]
+                
+                for ref in refactorings:
+                    strategy_name = ref['strategy'].upper()
+                    strategy_comment = f"""
+/*
+ * --------------------------------------------------------------------------------
+ * STRATEGY: {strategy_name} 
+ * --------------------------------------------------------------------------------
+ */"""
+                    code_blocks.append(strategy_comment)
+                    code_blocks.append(ref['code'])
+                
+                footer_comment = f"""
+/*
+ * ================================================================================
+ * END OF REFACTORED METHODS FOR: {method_name}
+ * ================================================================================
+ */"""
+                code_blocks.append(footer_comment)
+                
+                # Insert all blocks
+                full_insertion = '\n'.join(code_blocks)
+                lines.insert(insertion_line, full_insertion)
+                modified_content = '\n'.join(lines)
+                
+                logger.info(f"    ✓ Added {len(refactorings)} refactoring(s) for {method_name}")
+            
+            # Write modified content
+            test_file_path.write_text(modified_content, encoding='utf-8')
+            
+            if debug_mode:
+                logger.debug(f"\n--- Modified Content for {test_file_path} ---")
+                logger.debug(modified_content[:1000] + "..." if len(modified_content) > 1000 else modified_content)
+                logger.debug("=" * 60)
+            
+        except Exception as e:
+            logger.error(f"Error processing file {test_file_path}: {e}", exc_info=debug_mode)
+            backup_mgr.restore_file(test_file_path)
+    
+    logger.info(f"\n✓ Review-friendly code generation completed!")
+    logger.info("📝 Students can now review the refactored methods in the Java test files.")
+    logger.info("💡 Use --keep-rf-in-project to prevent automatic restoration of original files.")
+    logger.info("🔄 To restore original files, use git checkout or backup files.")
+
+
+def clean_refactored_phase(java_project_path: Path, debug_mode: bool = False) -> None:
+    """Clean up all refactored code from Java files using git checkout."""
+    logger.info("\nClean Refactored Code")
+    logger.info("=" * 50)
+    
+    try:
+        import subprocess
+        
+        # Check if we're in a git repository
+        result = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=java_project_path,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if result.returncode != 0:
+            logger.error(f"Java project is not a git repository: {java_project_path}")
+            logger.error("Cannot clean refactored code without git. Please manually restore files.")
+            return
+        
+        # Check git status for modified files
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--", "*.java"],
+            cwd=java_project_path,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if result.returncode != 0:
+            logger.error(f"Failed to check git status: {result.stderr}")
+            return
+        
+        modified_files = []
+        for line in result.stdout.strip().split('\n'):
+            if line.strip() and (line.startswith(' M') or line.startswith('M ')):
+                # Extract filename from git status output
+                filename = line[2:].strip()
+                if filename.endswith('.java'):
+                    modified_files.append(filename)
+        
+        if not modified_files:
+            logger.info("✓ No modified Java files found. Project is already clean.")
+            return
+        
+        logger.info(f"Found {len(modified_files)} modified Java files:")
+        for file in modified_files:
+            logger.info(f"  - {file}")
+        
+        # Use git checkout to restore all modified Java files
+        logger.info("Restoring Java files to their original state...")
+        result = subprocess.run(
+            ["git", "checkout", "HEAD", "--"] + modified_files,
+            cwd=java_project_path,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        
+        if result.returncode != 0:
+            logger.error(f"Failed to restore files: {result.stderr}")
+            return
+        
+        logger.info(f"✓ Successfully restored {len(modified_files)} Java files to their original state.")
+        
+        if debug_mode:
+            # Show final git status
+            result = subprocess.run(
+                ["git", "status", "--porcelain", "--", "*.java"],
+                cwd=java_project_path,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            remaining_modified = [line for line in result.stdout.strip().split('\n') if line.strip()]
+            if remaining_modified:
+                logger.debug(f"Remaining modified files: {remaining_modified}")
+            else:
+                logger.debug("All Java files have been restored.")
+        
+    except subprocess.TimeoutExpired:
+        logger.error("Git command timeout. Please manually restore Java files.")
+    except Exception as e:
+        logger.error(f"Error during cleanup: {str(e)}", exc_info=debug_mode)
+        logger.error("Please manually restore Java files using 'git checkout HEAD -- *.java'")
+
+
 def pit_test_phase(java_project_path: Path, output_path: Path, rftype: str, 
                    debug_mode: bool = False, keep_files: bool = False) -> None:
     """Phase 4: PIT Mutation Testing - Evaluate refactoring quality."""
     logger.info(f"\nPhase 4: PIT Mutation Testing ({rftype.upper()} strategy)")
     logger.info("=" * 50)
+    
+    # Clean any existing refactored code before starting
+    logger.info("Cleaning any existing refactored code before PIT testing...")
+    clean_refactored_phase(java_project_path, debug_mode)
+    
     logger.warning(f"PIT test phase for {rftype} strategy not yet implemented")
     # raise NotImplementedError("PIT testing phase is not yet implemented")
 
@@ -282,6 +570,12 @@ Examples:
 
   # Refactor only, using results from a previous discovery run
   aif --project /path/to/java/project --data /path/to/data --output /path/to/output --refactor-only --input-file /path/to/output/project_AAA_Refactor_Cases.csv
+  
+  # Generate review-friendly code with all strategies integrated
+  aif --project /path/to/java/project --data /path/to/data --output /path/to/output --show-refactored-only
+  
+  # Clean up refactored code after review
+  aif --project /path/to/java/project --data /path/to/data --output /path/to/output --clean-refactored-only
         """
     )
 
@@ -334,6 +628,16 @@ Examples:
         "--pit-test-only",
         action="store_true",
         help="Run only the PIT mutation testing phase for specified strategy"
+    )
+    phase_group.add_argument(
+        "--show-refactored-only",
+        action="store_true",
+        help="Generate review-friendly Java files with all refactored methods integrated by strategy blocks"
+    )
+    phase_group.add_argument(
+        "--clean-refactored-only",
+        action="store_true",
+        help="Clean up all refactored code from Java files using git checkout"
     )
 
     # Debugging flags
@@ -410,12 +714,12 @@ Examples:
         logger.info(f"Output Folder: {output_path}")
 
         # --- Phase Execution Logic ---
-        
+
         discovery_output_file = None
         if args.discovery_only:
             logger.info("\nMode: Discovery Only")
             discovery_phase(java_path, data_path, output_path)
-        
+            
         elif args.refactor_only:
             logger.info(f"\nMode: Refactor Only ({args.rftype.upper()} strategy)")
             if not args.input_file_path:
@@ -431,6 +735,14 @@ Examples:
         elif args.pit_test_only:
             logger.info(f"\nMode: PIT Test Only ({args.rftype.upper()} strategy)")
             pit_test_phase(java_path, output_path, args.rftype, args.debug, args.keep_files)
+            
+        elif args.show_refactored_only:
+            logger.info("\nMode: Show Refactored Code for Review")
+            show_refactored_phase(java_path, output_path, args.debug)
+            
+        elif args.clean_refactored_only:
+            logger.info("\nMode: Clean Refactored Code")
+            clean_refactored_phase(java_path, args.debug)
             
         else:
             # Full pipeline execution
