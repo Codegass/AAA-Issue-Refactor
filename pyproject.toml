@@ -3,7 +3,7 @@ name = "aaa-issue-refactor"
 version = "0.1.0"
 description = "Python CLI tool for automatically refactoring Java test cases using LLMs to eliminate AAA pattern violations"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 dependencies = [
     "openai>=1.0.0",
     "python-dotenv>=1.0.0",
