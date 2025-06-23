@@ -59,10 +59,44 @@ class PromptManager:
         return path.read_text(encoding='utf-8')
     
     def load_refactoring_prompt(self, issue_type: str) -> str:
-        """Load issue-specific refactoring prompt."""
-        # Handle combined issue types by taking the first (primary) issue
-        primary_issue = issue_type.split(',')[0].strip().strip('[]')
+        """Load issue-specific refactoring prompt(s). Handles multiple issue types."""
+        # Parse multiple issue types (comma or semicolon separated)
+        issue_types = []
+        for separator in [',', ';']:
+            if separator in issue_type:
+                issue_types = [issue.strip().strip('[]') for issue in issue_type.split(separator)]
+                break
         
+        if not issue_types:
+            # Single issue type
+            issue_types = [issue_type.strip().strip('[]')]
+        
+        # Load prompts for each issue type
+        prompts = []
+        for idx, single_issue in enumerate(issue_types):
+            try:
+                prompt = self._load_single_issue_prompt(single_issue)
+                prompts.append(f"### Issue Type {idx + 1}: {single_issue}\n{prompt}")
+            except FileNotFoundError as e:
+                logger.warning(f"Prompt not found for issue '{single_issue}': {e}")
+                # Continue with other issues, don't fail completely
+                continue
+        
+        if not prompts:
+            raise FileNotFoundError(f"No prompts found for any issue types in '{issue_type}'")
+        
+        if len(prompts) == 1:
+            # Single issue, return the prompt directly without numbering
+            return prompts[0].split('\n', 1)[1]  # Remove the "Issue Type 1:" header
+        else:
+            # Multiple issues, combine them
+            combined_prompt = "This test case has multiple AAA issues that need to be addressed:\n\n"
+            combined_prompt += "\n\n".join(prompts)
+            combined_prompt += "\n\nPlease refactor the test case to address ALL identified issues comprehensively."
+            return combined_prompt
+    
+    def _load_single_issue_prompt(self, issue_type: str) -> str:
+        """Load prompt for a single issue type."""
         # Convert issue type to filename format with special mappings
         filename_mappings = {
             "assert pre-condition": "assert_precondition",
@@ -74,7 +108,7 @@ class PromptManager:
             "suppressed exception": "suppressed_exception"
         }
         
-        normalized_issue = primary_issue.lower()
+        normalized_issue = issue_type.lower()
         filename = filename_mappings.get(normalized_issue, normalized_issue.replace(" ", "_").replace("-", "_"))
         filename += ".md"
         
@@ -125,8 +159,29 @@ class PromptManager:
 <Refactoring Prompt>{refactoring_prompt}</Refactoring Prompt>"""
     
     def format_validation_user_prompt(self, context: TestContext, refactored_code: str, all_imports: List[str], original_issue: str) -> str:
-        """Format the user prompt for validation."""
-        return f"""<original issue type>{original_issue}</original issue type>
+        """Format the user prompt for validation. Handles multiple issue types."""
+        # Parse multiple issue types if present
+        issue_types = []
+        for separator in [',', ';']:
+            if separator in original_issue:
+                issue_types = [issue.strip().strip('[]') for issue in original_issue.split(separator)]
+                break
+        
+        if not issue_types:
+            # Single issue type
+            issue_types = [original_issue.strip().strip('[]')]
+        
+        # Create validation prompt for multiple issues
+        if len(issue_types) == 1:
+            issues_section = f"<original issue type>{issue_types[0]}</original issue type>"
+        else:
+            issues_section = f"<original issue types>{', '.join(issue_types)}</original issue types>"
+            issues_section += f"\n<individual issue types>"
+            for idx, issue in enumerate(issue_types, 1):
+                issues_section += f"\n<issue {idx}>{issue}</issue {idx}>"
+            issues_section += f"\n</individual issue types>"
+        
+        return f"""{issues_section}
 <Test Case Source Code>{refactored_code}</Test Case Source Code>
 <Test Case Import Packages>{', '.join(all_imports)}</Test Case Import Packages>
 <Production Function Implementations>{', '.join(context.production_function_implementations)}</Production Function Implementations>
@@ -270,18 +325,43 @@ class TestRefactor:
         return ""
     
     def parse_validation_response(self, response: str) -> Dict[str, Any]:
-        """Parse LLM validation response with robust parsing."""
+        """Parse LLM validation response with robust parsing. Handles multiple issue types."""
         result = {
             "original_issue_exists": True,
             "new_issue_exists": False,
             "new_issue_type": "",
-            "reasoning": ""
+            "reasoning": "",
+            "individual_issue_status": []  # For tracking multiple issues
         }
         
-        # Extract original issue existence
-        original_exists_text = self._extract_xml_content(response, "original issue type exists")
-        if original_exists_text:
-            result["original_issue_exists"] = self._parse_boolean(original_exists_text)
+        # First try to extract individual issue status (for multiple issues)
+        individual_issues = []
+        issue_count = 1
+        while True:
+            issue_exists_text = self._extract_xml_content(response, f"issue {issue_count} exists")
+            if not issue_exists_text:
+                break
+            individual_issues.append({
+                "issue_number": issue_count,
+                "exists": self._parse_boolean(issue_exists_text)
+            })
+            issue_count += 1
+        
+        if individual_issues:
+            # Multiple issues case
+            result["individual_issue_status"] = individual_issues
+            # Overall original issue exists if ANY individual issue still exists
+            result["original_issue_exists"] = any(issue["exists"] for issue in individual_issues)
+        else:
+            # Single issue case - try legacy format
+            original_exists_text = self._extract_xml_content(response, "original issue type exists")
+            if original_exists_text:
+                result["original_issue_exists"] = self._parse_boolean(original_exists_text)
+            
+            # Also try plural format for backward compatibility
+            original_exists_plural = self._extract_xml_content(response, "original issue types exist")
+            if original_exists_plural:
+                result["original_issue_exists"] = self._parse_boolean(original_exists_plural)
         
         # Extract new issue existence
         new_exists_text = self._extract_xml_content(response, "new issue type exists")

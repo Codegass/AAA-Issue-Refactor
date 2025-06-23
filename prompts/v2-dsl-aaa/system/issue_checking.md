@@ -107,4 +107,4 @@ When multiple original issue types are provided (e.g., "Assert Pre-condition, Mi
 - Consider the complete context including imports and helper methods
 - Focus on structural patterns, not just surface-level code appearance
 - When in doubt, err on the side of identifying potential issues
-- For multiple issues, ensure ALL must be resolved for successful refactoring
+- For multiple issues, ensure ALL must be resolved for successful refactoring 

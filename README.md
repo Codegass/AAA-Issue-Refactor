@@ -55,12 +55,11 @@ aif --project /path/to/java/project \
     --data /path/to/data/folder \
     --output /path/to/output/folder
 
-# Refactor only (AAA strategy)
+# Refactor only (AAA strategy, auto-discovers discovery file)
 aif --project /path/to/java/project \
     --data /path/to/data/folder \
     --output /path/to/output/folder \
-    --refactor-only --rftype aaa \
-    --input-file /path/to/discovery/results.csv
+    --refactor-only --rftype aaa
 
 # Generate review-friendly code
 aif --project /path/to/java/project \
@@ -90,12 +89,11 @@ uv run aif --project ./example_data_for_testing/commons-cli \
           --output ./test_output \
           --discovery-only
 
-# AAA strategy refactoring
+# AAA strategy refactoring (auto-discovers discovery file)
 uv run aif --project ./example_data_for_testing/commons-cli \
           --data ./example_data_for_testing/AAA-commons-cli \
           --output ./test_output \
-          --refactor-only --rftype aaa \
-          --input-file ./test_output/commons-cli_AAA_Refactor_Cases.csv
+          --refactor-only --rftype aaa
 
 # Execution testing
 uv run aif --project ./example_data_for_testing/commons-cli \
@@ -320,9 +318,10 @@ Based on Commons CLI project (10 test cases):
 aif --debug --keep-rf-in-project [other parameters]
 ```
 
-### Custom Input File
+### Custom Input File (optional)
 ```bash
-aif --refactor-only --input-file /custom/path/test_cases.csv [other parameters]
+# The tool auto-discovers discovery files, but you can specify a custom one if needed
+aif --refactor-only --rftype aaa --input-file /custom/path/test_cases.csv [other parameters]
 ```
 
 ### Disable Auto-Update

@@ -390,9 +390,10 @@ uv run aif --project /path/to/your/java/project \
           --data /path/to/your/data/folder \
           --output /path/to/output/folder \
           --refactor-only --rftype aaa \
-          --input-file /path/to/output/project_AAA_Refactor_Cases.csv \
           --no-auto-update
 ```
+
+**Note:** The tool automatically discovers the discovery file (`project_AAA_Refactor_Cases.csv`) from the output folder. You can optionally specify a custom input file with `--input-file` if needed.
 
 | **What it does** | **Output** |
 | --- | --- |
@@ -628,8 +629,8 @@ cd AAA-Issue-Refactor
 # 1. Discovery
 uv run aif --project /path/to/java --data /path/to/data --output /path/to/output --discovery-only --no-auto-update
 
-# 2. Refactoring  
-uv run aif --project /path/to/java --data /path/to/data --output /path/to/output --refactor-only --rftype aaa --input-file /path/to/output/project_AAA_Refactor_Cases.csv --no-auto-update
+# 2. Refactoring (auto-discovers discovery file)
+uv run aif --project /path/to/java --data /path/to/data --output /path/to/output --refactor-only --rftype aaa --no-auto-update
 
 # 3. Testing
 uv run aif --project /path/to/java --data /path/to/data --output /path/to/output --execution-test-only --no-auto-update

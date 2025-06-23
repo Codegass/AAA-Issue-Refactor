@@ -42,6 +42,28 @@ def validate_paths(java_project_path: str, data_folder_path: str, output_folder_
     return java_path, data_path, output_path
 
 
+def find_discovery_file(java_project_path: Path, output_path: Path) -> Optional[Path]:
+    """
+    Auto-discover the discovery results file based on project name.
+    Returns the path to <project_name>_AAA_Refactor_Cases.csv if found.
+    """
+    project_name = java_project_path.name
+    discovery_file = output_path / f"{project_name}_AAA_Refactor_Cases.csv"
+    
+    if discovery_file.exists():
+        logger.info(f"Auto-discovered discovery file: {discovery_file}")
+        return discovery_file
+    
+    # Try to find any discovery file in output directory
+    discovery_files = list(output_path.glob("*_AAA_Refactor_Cases.csv"))
+    if discovery_files:
+        discovery_file = discovery_files[0]
+        logger.info(f"Found discovery file: {discovery_file}")
+        return discovery_file
+    
+    return None
+
+
 def discovery_phase(java_project_path: Path, data_folder_path: Path, output_path: Path) -> Path:
     """Phase 1: Test Discovery & Validation."""
     logger.info("Phase 1: Test Discovery & Validation")
@@ -128,10 +150,11 @@ def refactoring_phase(test_cases: List[TestCase], java_project_path: Path,
                 else:
                     logger.info("  Refactoring...")
                     refactoring_result = refactor.refactor_test_case(test_case, rftype=rftype, debug_mode=debug_mode)
-                    if refactoring_result.success:
-                        logger.info(f"  ✓ Refactoring successful ({refactoring_result.iterations} iterations)")
-                    else:
-                        logger.error(f"  ✗ Refactoring failed: {refactoring_result.error_message}")
+                    
+                if refactoring_result.success:
+                    logger.info(f"  ✓ Refactoring successful ({refactoring_result.iterations} iterations)")
+                else:
+                    logger.error(f"  ✗ Refactoring failed: {refactoring_result.error_message}")
 
                 result_record = recorder.create_result_record(
                     test_case, original_code, original_imports, refactoring_result, rftype
@@ -568,8 +591,11 @@ Examples:
   # Discovery phase only
   aif --project /path/to/java/project --data /path/to/data --output /path/to/output --discovery-only
 
-  # Refactor only, using results from a previous discovery run
-  aif --project /path/to/java/project --data /path/to/data --output /path/to/output --refactor-only --input-file /path/to/output/project_AAA_Refactor_Cases.csv
+  # Refactor only (auto-discovers discovery file from output folder)
+  aif --project /path/to/java/project --data /path/to/data --output /path/to/output --refactor-only --rftype aaa
+  
+  # Refactor only with custom input file
+  aif --project /path/to/java/project --data /path/to/data --output /path/to/output --refactor-only --rftype aaa --input-file /path/to/custom.csv
   
   # Generate review-friendly code with all strategies integrated
   aif --project /path/to/java/project --data /path/to/data --output /path/to/output --show-refactored-only
@@ -656,7 +682,7 @@ Examples:
     parser.add_argument(
         "--input-file",
         dest="input_file_path",
-        help="Path to a custom input CSV file for a phase (e.g., discovery results)"
+        help="Path to a custom input CSV file for refactor-only phase (optional, auto-discovers if not provided)"
     )
 
     parser.add_argument(
@@ -685,9 +711,6 @@ Examples:
     
     if args.pit_test_only and not args.rftype:
         parser.error("--pit-test-only requires --rftype")
-    
-    if args.refactor_only and not args.input_file_path:
-        parser.error("--refactor-only requires --input-file (e.g., from a discovery run)")
 
     try:
         java_path, data_path, output_path = validate_paths(
@@ -722,9 +745,17 @@ Examples:
             
         elif args.refactor_only:
             logger.info(f"\nMode: Refactor Only ({args.rftype.upper()} strategy)")
-            if not args.input_file_path:
-                parser.error("--refactor-only requires --input-file (e.g., from a discovery run)")
-            input_file = Path(args.input_file_path)
+            
+            # Auto-discover or use specified input file
+            if args.input_file_path:
+                input_file = Path(args.input_file_path)
+                logger.info(f"Using specified input file: {input_file}")
+            else:
+                input_file = find_discovery_file(java_path, output_path)
+                if not input_file:
+                    logger.error("No discovery file found. Please run discovery phase first or specify --input-file")
+                    sys.exit(1)
+            
             test_cases = load_test_cases_from_csv(input_file)
             refactoring_phase(test_cases, java_path, data_path, output_path, args.rftype, args.debug)
             
