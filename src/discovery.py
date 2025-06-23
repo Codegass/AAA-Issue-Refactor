@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
+import logging
+
+logger = logging.getLogger('aif')
 
 class TestCase:
     """Represents a test case with metadata."""
@@ -65,6 +68,8 @@ class TestDiscovery:
         
         return None
     
+
+    
     def count_lines_of_code(self, file_path: Path, method_name: str) -> int:
         """Count lines of code for a specific test method."""
         try:
@@ -101,6 +106,17 @@ class TestDiscovery:
         
         validator = CodeValidator(self.java_project_path)
         
+        logger.info("Performing initial project build...")
+        compile_success, compile_output = validator.compile_java_project()
+        if not compile_success:
+            logger.error("Initial project build failed. Aborting validation.")
+            logger.error(f"Build output:\n{compile_output}")
+            for tc in test_cases:
+                tc.runable = "no"
+                tc.pass_status = "initial_build_failure"
+            return test_cases
+        logger.info("✓ Initial project build successful.")
+
         # Define a worker function for each thread
         def _validate_worker(test_case: TestCase) -> TestCase:
             test_file = self.find_test_file(test_case.test_class_name)
@@ -135,26 +151,31 @@ class TestDiscovery:
 
         validated_cases = []
         # Use ThreadPoolExecutor to run validations in parallel
-        # Limiting workers to 10 to avoid overwhelming the system with mvn processes
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        # Using only 1 worker to avoid Maven concurrency issues
+        with ThreadPoolExecutor(max_workers=1) as executor:
             # Create a future for each test case
             future_to_case = {executor.submit(_validate_worker, tc): tc for tc in test_cases}
             
             # Process as they complete, with a progress bar
-            for future in tqdm(as_completed(future_to_case), total=len(test_cases), desc="Validating test cases"):
+            progress_bar = tqdm(as_completed(future_to_case), total=len(test_cases), 
+                                desc="Validating test cases",
+                                bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]',
+                                ascii=True) # Use ASCII characters for better compatibility
+            
+            for future in progress_bar:
                 try:
                     validated_case = future.result()
                     validated_cases.append(validated_case)
                 except Exception as exc:
                     case = future_to_case[future]
-                    print(f"\nError validating {case.test_method_name}: {exc}")
+                    logger.error(f"\nError validating {case.test_method_name}: {exc}")
                     # Mark as failed if an exception occurs
                     case.pass_status = "validation_error"
                     validated_cases.append(case)
         
         return sorted(validated_cases, key=lambda tc: test_cases.index(tc))
     
-    def save_refactor_cases_csv(self, test_cases: List[TestCase], output_path: Path) -> None:
+    def save_refactor_cases_csv(self, test_cases: List[TestCase], output_path: Path) -> Path:
         """Save validated test cases to refactor cases CSV."""
         output_file = output_path / f"{test_cases[0].project_name}_AAA_Refactor_Cases.csv"
         
@@ -177,3 +198,5 @@ class TestDiscovery:
                     'runable': test_case.runable,
                     'pass': test_case.pass_status
                 })
+        
+        return output_file

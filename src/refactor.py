@@ -2,12 +2,17 @@
 
 import json
 import time
+import re
 from pathlib import Path
 from typing import Dict, Any, Optional, List
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import logging
 
 from .llm_client import LLMClient
 from .discovery import TestCase
+from .sanitizer import Sanitizer
+
+logger = logging.getLogger('aif')
 
 @dataclass
 class TestContext:
@@ -29,7 +34,8 @@ class RefactoringResult:
     """Result of a refactoring operation."""
     success: bool
     refactored_code: Optional[str] = None
-    additional_imports: Optional[List[str]] = None
+    refactored_method_names: Optional[List[str]] = field(default_factory=list)
+    additional_imports: Optional[List[str]] = field(default_factory=list)
     reasoning: Optional[str] = None
     iterations: int = 0
     error_message: Optional[str] = None
@@ -76,11 +82,38 @@ class PromptManager:
             raise FileNotFoundError(f"Refactoring prompt not found: {path}")
         return path.read_text(encoding='utf-8')
     
+    def _analyze_frameworks(self, imports: List[str], source_code: str) -> str:
+        """Analyzes import statements to identify testing and mocking frameworks."""
+        frameworks = []
+        # Test Frameworks
+        if any("org.junit.jupiter" in imp for imp in imports):
+            frameworks.append("JUnit 5")
+        elif any("org.junit.Test" in imp for imp in imports):
+            frameworks.append("JUnit 4")
+        elif "extends TestCase" in source_code and any("junit.framework.TestCase" in imp for imp in imports):
+            frameworks.append("JUnit 3")
+        
+        if any("org.testng" in imp for imp in imports):
+            frameworks.append("TestNG")
+
+        # Mock Frameworks
+        if any("org.mockito" in imp for imp in imports):
+            frameworks.append("Mockito")
+        if any("org.easymock" in imp for imp in imports):
+            frameworks.append("EasyMock")
+            
+        if not frameworks:
+            return "Unknown"
+        
+        return " and ".join(frameworks)
+
     def format_refactoring_user_prompt(self, context: TestContext, issue_type: str) -> str:
         """Format the user prompt for refactoring."""
         refactoring_prompt = self.load_refactoring_prompt(issue_type)
+        frameworks = self._analyze_frameworks(context.imported_packages, context.test_case_source_code)
         
         return f"""<Issue Type>{issue_type}</Issue Type>
+<Test Frameworks>{frameworks}</Test Frameworks>
 <Test Case Source Code>{context.test_case_source_code}</Test Case Source Code>
 <Test Case Import Packages>{', '.join(context.imported_packages)}</Test Case Import Packages>
 <Production Function Implementations>{', '.join(context.production_function_implementations)}</Production Function Implementations>
@@ -104,10 +137,11 @@ class PromptManager:
 class TestRefactor:
     """Main test refactoring orchestrator."""
     
-    def __init__(self, prompts_dir: Path, data_folder_path: Path):
-        self.prompt_manager = PromptManager(prompts_dir)
+    def __init__(self, prompts_dir: Path, data_folder_path: Path, rftype: str):
+        self.prompt_manager = PromptManager(prompts_dir / f"v1-{rftype}")
         self.data_folder_path = data_folder_path
         self.llm_client = LLMClient()
+        self.sanitizer = Sanitizer()
     
     def load_test_context(self, project_name: str, test_class: str, test_method: str) -> TestContext:
         """Load test context from JSON file."""
@@ -135,17 +169,17 @@ class TestRefactor:
         )
     
     def parse_refactoring_response(self, response: str) -> Dict[str, Any]:
-        """Parse LLM refactoring response with robust XML tag extraction."""
+        """Parse LLM refactoring response with robust XML tag extraction, returning raw code."""
         result = {
-            "refactored_code": "",
+            "raw_refactored_code": "",
             "additional_imports": [],
             "reasoning": ""
         }
         
-        # Extract refactored code
+        # Extract refactored code (raw)
         refactored_code = self._extract_xml_content(response, "Refactored Test Case Source Code")
         if refactored_code:
-            result["refactored_code"] = refactored_code
+            result["raw_refactored_code"] = refactored_code
         
         # Extract additional imports
         imports_text = self._extract_xml_content(response, "Refactored Test Case Additional Import Packages")
@@ -165,6 +199,22 @@ class TestRefactor:
         
         return result
     
+    def _extract_method_names(self, code: str) -> List[str]:
+        """
+        Extracts all method names from a block of Java code that are annotated with @Test.
+        This regex is designed to be robust by:
+        1. Anchoring to the start of a line (`re.MULTILINE`).
+        2. Allowing for other annotations between @Test and the method signature (`re.DOTALL`).
+        3. Handling various modifiers (public, static, etc.).
+        4. Greatly reducing the chance of matching @Test inside comments or string literals.
+        """
+        # It finds a line starting with @Test, lazily consumes until `void`, then captures the method name.
+        pattern = re.compile(
+            r"^\s*@Test.*?\s+void\s+([a-zA-Z_]\w*)\s*\(",
+            re.MULTILINE | re.DOTALL
+        )
+        return pattern.findall(code)
+
     def _extract_xml_content(self, text: str, tag_name: str) -> str:
         """Extract content between XML-like tags with fallback strategies."""
         # Try exact match first
@@ -254,109 +304,129 @@ class TestRefactor:
             # Default to True for safety (assume issue exists if unclear)
             return True
     
-    def refactor_test_case(self, test_case: TestCase, max_iterations: int = 5) -> RefactoringResult:
-        """Refactor a single test case with iterative improvement."""
+    def refactor_test_case(self, test_case: TestCase, debug_mode: bool = False, max_refinement_loops: int = 5) -> RefactoringResult:
+        """
+        Refactors a single test case using a two-loop process.
+        - Outer loop: Validation-driven refinement (max 5 iterations).
+        - Inner loop: Code sanitization to get a clean response (max 3 retries).
+        """
         start_time = time.time()
-        chat_history = []
         
         try:
-            # Load test context
             context = self.load_test_context(
                 test_case.project_name,
                 test_case.test_class_name,
                 test_case.test_method_name
             )
             
-            # Load prompts
             refactoring_system_prompt = self.prompt_manager.load_system_prompt("refactoring")
             validation_system_prompt = self.prompt_manager.load_system_prompt("issue_checking")
             
-            current_code = context.test_case_source_code
-            current_imports = context.imported_packages.copy()
-            iterations = 0
+            self.llm_client.reset_usage_stats()
             
-            for iteration in range(max_iterations):
-                iterations += 1
+            # --- State for the outer refinement loop ---
+            refactoring_session_messages = []
+            validation_feedback_for_refactoring = ""
+            
+            # --- Outer loop for validation-driven refinement ---
+            for loop_num in range(max_refinement_loops):
                 
-                # Refactoring step
-                user_prompt = self.prompt_manager.format_refactoring_user_prompt(context, test_case.issue_type)
-                refactoring_response = self.llm_client.refactor_test_case(refactoring_system_prompt, user_prompt)
-                
-                chat_history.append(f"Iteration {iteration + 1} - Refactoring:")
-                chat_history.append(f"User: {user_prompt}")
-                chat_history.append(f"Assistant: {refactoring_response}")
-                
-                # Parse refactoring response
-                refactoring_result = self.parse_refactoring_response(refactoring_response)
-                
-                if not refactoring_result["refactored_code"]:
+                # --- Inner loop to get a clean, well-formatted response ---
+                max_sanitizer_retries = 3
+                sanitized_code = ""
+                parsed_llm_result = {}
+
+                for attempt in range(max_sanitizer_retries):
+                    logger.debug(f"Refinement loop {loop_num + 1}/{max_refinement_loops}, Sanitizer attempt {attempt + 1}/{max_sanitizer_retries}")
+                    
+                    user_prompt = self.prompt_manager.format_refactoring_user_prompt(context, test_case.issue_type)
+                    
+                    # Add feedback from the previous validation loop to the user prompt
+                    if validation_feedback_for_refactoring:
+                        user_prompt += f"\n<Validation Feedback>{validation_feedback_for_refactoring}</Validation Feedback>"
+
+                    # Create a temporary list of messages for this specific API call
+                    current_call_messages = refactoring_session_messages + [{"role": "user", "content": user_prompt}]
+
+                    # 1. Refactoring API Call
+                    refactoring_response = self.llm_client.send_chat_request(refactoring_system_prompt, current_call_messages)
+                    
+                    # 2. Parse and Sanitize
+                    raw_parsed = self.parse_refactoring_response(refactoring_response)
+                    sanitized_code = self.sanitizer.clean_code(raw_parsed.get("raw_refactored_code", ""))
+                    
+                    # 3. Check sanitization quality
+                    if self.sanitizer.was_last_clean_successful(raw_parsed.get("raw_refactored_code", ""), sanitized_code):
+                        parsed_llm_result = raw_parsed
+                        
+                        # Add the successful exchange to our main refactoring history
+                        refactoring_session_messages.append({"role": "user", "content": user_prompt})
+                        refactoring_session_messages.append({"role": "assistant", "content": refactoring_response})
+                        break
+                    else:
+                        logger.warning(f"  ⚠ Sanitizer made significant changes. Retrying LLM call... (Attempt {attempt + 2}/{max_sanitizer_retries})")
+                        time.sleep(1)
+
+                if not sanitized_code:
                     return RefactoringResult(
-                        success=False,
-                        error_message="Failed to extract refactored code from LLM response",
-                        iterations=iterations,
-                        chat_history='\n'.join(chat_history),
-                        processing_time=time.time() - start_time
+                        success=False, error_message=f"Failed to get a clean response from LLM after {max_sanitizer_retries} attempts.",
+                        iterations=loop_num + 1, processing_time=time.time() - start_time
                     )
                 
-                current_code = refactoring_result["refactored_code"]
-                if refactoring_result["additional_imports"]:
-                    current_imports.extend(refactoring_result["additional_imports"])
+                # --- End of inner sanitizer loop. We now have good, sanitized code. ---
+                logger.debug(f"\n--- Sanitized Code (Loop {loop_num+1}) ---\n{sanitized_code}\n---")
                 
-                # Validation step
-                validation_prompt = self.prompt_manager.format_validation_user_prompt(
-                    context, current_code, current_imports, test_case.issue_type
-                )
-                validation_response = self.llm_client.validate_refactored_code(validation_system_prompt, validation_prompt)
+                # 4. Validate the sanitized code
+                all_imports = context.imported_packages + parsed_llm_result.get("additional_imports", [])
+                validation_prompt = self.prompt_manager.format_validation_user_prompt(context, sanitized_code, all_imports, test_case.issue_type)
                 
-                chat_history.append(f"Iteration {iteration + 1} - Validation:")
-                chat_history.append(f"User: {validation_prompt}")
-                chat_history.append(f"Assistant: {validation_response}")
-                
-                # Parse validation response
+                # The validation session is independent and stateless
+                validation_response = self.llm_client.send_chat_request(validation_system_prompt, [{"role": "user", "content": validation_prompt}])
                 validation_result = self.parse_validation_response(validation_response)
                 
-                # Check if refactoring is successful
+                if debug_mode:
+                    logger.debug(f"--- Validation Response (Loop {loop_num+1}) ---\n{validation_response}\n---")
+                    logger.debug(f"Parsed validation: {validation_result}")
+
+                # 5. Check if refactoring is complete
                 if not validation_result["original_issue_exists"] and not validation_result["new_issue_exists"]:
-                    # Success!
+                    logger.info("  ✓ Validation successful. Refactoring complete.")
                     usage_stats = self.llm_client.get_usage_stats()
                     return RefactoringResult(
                         success=True,
-                        refactored_code=current_code,
-                        additional_imports=refactoring_result["additional_imports"],
-                        reasoning=refactoring_result["reasoning"],
-                        iterations=iterations,
-                        chat_history='\n'.join(chat_history),
+                        refactored_code=sanitized_code,
+                        refactored_method_names=self._extract_method_names(sanitized_code),
+                        additional_imports=parsed_llm_result.get("additional_imports", []),
+                        reasoning=parsed_llm_result.get("reasoning", ""),
+                        iterations=loop_num + 1,
+                        chat_history=json.dumps(refactoring_session_messages, indent=2),
                         tokens_used=usage_stats["total_tokens"],
                         cost=usage_stats["total_cost"],
                         processing_time=time.time() - start_time
                     )
                 
-                # If we have new issues or the original issue persists, continue iterating
-                if iteration < max_iterations - 1:
-                    # Update context for next iteration with validation feedback
-                    context.test_case_source_code = current_code
-                    context.imported_packages = current_imports
+                # 6. If issues persist, prepare feedback for the next loop
+                logger.info(f"  - Validation failed on loop {loop_num + 1}. Preparing feedback for retry...")
+                validation_feedback_for_refactoring = validation_result.get("reasoning", "The previous attempt was not correct. Please try again.")
+                if debug_mode:
+                    logger.debug(f"Feedback for next loop: {validation_feedback_for_refactoring}")
+                context.test_case_source_code = sanitized_code # Use the failed code as basis for next attempt
             
-            # Max iterations reached without success
+            # Max outer loops reached without success
             usage_stats = self.llm_client.get_usage_stats()
             return RefactoringResult(
-                success=False,
-                error_message="Maximum iterations reached without successful refactoring",
-                iterations=iterations,
-                chat_history='\n'.join(chat_history),
-                tokens_used=usage_stats["total_tokens"],
-                cost=usage_stats["total_cost"],
+                success=False, error_message=f"Maximum refinement loops ({max_refinement_loops}) reached without success.",
+                iterations=max_refinement_loops, chat_history=json.dumps(refactoring_session_messages, indent=2),
+                tokens_used=usage_stats["total_tokens"], cost=usage_stats["total_cost"],
                 processing_time=time.time() - start_time
             )
             
         except Exception as e:
+            logger.error(f"  ✗ An unexpected error occurred during refactoring: {e}", exc_info=debug_mode)
             usage_stats = self.llm_client.get_usage_stats()
             return RefactoringResult(
-                success=False,
-                error_message=str(e),
-                iterations=iterations,
-                chat_history='\n'.join(chat_history),
-                tokens_used=usage_stats["total_tokens"],
-                cost=usage_stats["total_cost"],
+                success=False, error_message=str(e),
+                iterations=0, # Or pass loop_num if you can
+                tokens_used=usage_stats["total_tokens"], cost=usage_stats["total_cost"],
                 processing_time=time.time() - start_time
             )
