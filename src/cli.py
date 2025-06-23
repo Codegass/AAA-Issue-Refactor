@@ -20,7 +20,7 @@ from .refactor import TestRefactor, RefactoringResult, TestContext
 from .validator import CodeValidator
 from .executor import ResultsRecorder
 from .logger import setup_logger
-from .utils import BackupManager
+from .utils import BackupManager, check_and_auto_update
 
 logger = logging.getLogger('aif')
 
@@ -361,6 +361,18 @@ Examples:
         version="AAA Issue Refactor v0.1.0"
     )
 
+    # Auto-update options
+    parser.add_argument(
+        "--no-auto-update",
+        action="store_true",
+        help="Disable automatic update check and pull from GitHub"
+    )
+    parser.add_argument(
+        "--force-update",
+        action="store_true",
+        help="Force update even if local changes are detected"
+    )
+
     args = parser.parse_args()
 
     # Validation for phase-specific requirements
@@ -384,6 +396,15 @@ Examples:
 
         logger.info("AAA Issue Refactor Tool")
         logger.info("=" * 50)
+        
+        # Auto-update check (unless disabled)
+        if not args.no_auto_update:
+            try:
+                check_and_auto_update(force=args.force_update)
+            except Exception as e:
+                logger.warning(f"自动更新检查失败: {e}")
+                logger.info("继续执行程序...")
+
         logger.info(f"Java Project: {java_path}")
         logger.info(f"Data Folder: {data_path}")
         logger.info(f"Output Folder: {output_path}")
