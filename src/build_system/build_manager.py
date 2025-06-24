@@ -263,11 +263,10 @@ class SmartBuildManager:
         error_message += "   2. Fix any compilation errors shown in the IDE\n"
         error_message += "   3. Re-run the execution test phase\n\n"
         
-        # Add detailed error output in debug mode
-        if logger.isEnabledFor(logging.DEBUG):
-            error_message += "📋 Detailed Error Output:\n"
-            error_message += "-" * 50 + "\n"
-            error_message += compile_output
-            error_message += "\n" + "-" * 50
+        # Add detailed error output (always show for compilation errors)
+        error_message += "📋 Detailed Error Output:\n"
+        error_message += "-" * 50 + "\n"
+        error_message += compile_output
+        error_message += "\n" + "-" * 50
         
         return error_message 

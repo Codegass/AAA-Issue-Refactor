@@ -414,7 +414,10 @@ class MavenBuildSystem(BuildSystem):
                 
                 command = [
                     "mvn", "test-compile", "-q",
-                    "-DskipTests=true"
+                    "-DskipTests=true",
+                    "-Drat.skip=true",  # Skip Apache RAT license check
+                    "-Dcheckstyle.skip=true",  # Skip Checkstyle validation
+                    "-Dmaven.javadoc.skip=true"  # Skip JavaDoc generation
                 ] + module_args
                 
                 # Add project-specific flags
@@ -435,9 +438,13 @@ class MavenBuildSystem(BuildSystem):
                     logger.debug(f"Successfully compiled module: {module_path}")
                 else:
                     overall_success = False
+                    # Include detailed error information in the message
+                    error_detail = result.stderr.strip() if result.stderr.strip() else result.stdout.strip()
                     error_msg = f"Incremental compilation failed for module {module_path.name}"
+                    if error_detail:
+                        error_msg += f": {error_detail}"
                     error_messages.append(error_msg)
-                    logger.error(f"{error_msg}\nError output: {result.stderr}")
+                    logger.error(f"{error_msg}")
                     
                     # Check if this is a setup/fixture related error
                     if self._is_fixture_error(result.stderr):
