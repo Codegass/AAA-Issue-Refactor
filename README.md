@@ -447,3 +447,56 @@ For questions or suggestions, please contact us through:
 <div align="center">
 Made with ❤️ for automated test refactoring
 </div>
+
+## Features
+
+- **Automatic Test Discovery**: Find and validate test cases with AAA pattern violations
+- **LLM-Powered Refactoring**: Use state-of-the-art language models to refactor test code
+- **Multiple Strategies**: Support for AAA, DSL, and Test Smell refactoring approaches
+- **Execution Validation**: Automatically test refactored code to ensure functionality
+- **Smart Build Management**: Hybrid build system with automatic detection and manual fallback
+- **Review-Friendly Output**: Generate code for easy student review and learning
+- **Comprehensive Reporting**: Detailed CSV results with usage statistics and chat histories
+
+## Review Columns for Student Assessment
+
+The tool now includes dedicated review columns in the output CSV files for student assessment and feedback:
+
+### For Each Strategy (AAA, DSL, TestSmell):
+
+#### `{strategy}_review_fix_issue_or_not`
+- **Purpose**: Record whether the refactoring successfully fixed the identified AAA issue
+- **Values**: 
+  - `Yes` - The refactoring successfully addressed the AAA violation
+  - `No` - The refactoring did not fix the issue or introduced new problems
+  - `Partial` - The refactoring partially addressed the issue
+  - `N/A` - Not applicable (e.g., for "Good AAA" cases)
+  - (Empty) - Not yet reviewed
+
+#### `{strategy}_review_why_fail`
+- **Purpose**: Provide detailed explanation when refactoring fails or is problematic
+- **Use Cases**:
+  - Compilation errors in refactored code
+  - Logical errors or incorrect test behavior
+  - Poor code quality or style issues
+  - Incomplete AAA pattern implementation
+  - Missing edge cases or test coverage
+  - (Empty) - Not applicable or no issues found
+
+### Example Usage:
+
+```csv
+v1_aaa_review_fix_issue_or_not,v1_aaa_review_why_fail
+"Yes",""
+"No","Refactored code has compilation error - missing import statement"
+"Partial","AAA pattern improved but assert section still unclear"
+"N/A","Original test already follows good AAA pattern"
+```
+
+### Review Workflow:
+
+1. **Run the complete pipeline** to generate refactored results
+2. **Open the CSV file** in Excel, Google Sheets, or similar tool
+3. **For each test case**, review the refactored code column
+4. **Fill in the review columns** based on code quality and correctness
+5. **Use the data** for grading, feedback, or research analysis
