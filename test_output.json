@@ -1,0 +1,10 @@
+[
+  {
+    "role": "user",
+    "content": "This is a test\nwith newlines\nand more text"
+  },
+  {
+    "role": "assistant",
+    "content": "Response\nwith\nmultiple\nlines"
+  }
+]

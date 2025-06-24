@@ -15,19 +15,19 @@ import subprocess
 import json
 import time
 
-from .executor import CommandExecutor
-from .utils import BackupManager
+from .build_system import create_build_system, BuildSystem
+from .utils import CommandExecutor, BackupManager
 
-logger = logging.getLogger('aif.pit')
+logger = logging.getLogger('aif')
 
 
 @dataclass
 class PITResult:
-    """Results from a PIT mutation testing run."""
+    """Result of PIT mutation testing."""
     test_class: str
     test_method: str
-    mutation_score: float
-    line_coverage: float
+    mutation_score: float  # Percentage of mutants killed
+    line_coverage: float   # Line coverage percentage
     mutants_killed: int
     mutants_survived: int
     total_mutants: int
@@ -35,20 +35,52 @@ class PITResult:
     pit_output: str
     success: bool
     error_message: Optional[str] = None
+    
+    def __str__(self) -> str:
+        return (f"PIT Results for {self.test_class}.{self.test_method}:\n"
+                f"  Mutation Score: {self.mutation_score:.1%}\n"
+                f"  Line Coverage: {self.line_coverage:.1%}\n"
+                f"  Mutants: {self.mutants_killed} killed, {self.mutants_survived} survived, {self.total_mutants} total\n"
+                f"  Execution Time: {self.execution_time:.2f}s\n"
+                f"  Success: {self.success}")
 
 
 @dataclass
 class PITComparison:
     """Comparison between original and refactored test PIT results."""
-    project_name: str
-    test_class_name: str
-    test_method_name: str
-    strategy: str
-    original_result: Optional[PITResult]
-    refactored_result: Optional[PITResult]
-    mutation_score_improvement: Optional[float]
-    coverage_improvement: Optional[float]
-    quality_improvement: str  # "improved", "degraded", "unchanged", "error"
+    original: PITResult
+    refactored: PITResult
+    
+    @property
+    def mutation_score_improvement(self) -> float:
+        """Calculate improvement in mutation score."""
+        return self.refactored.mutation_score - self.original.mutation_score
+    
+    @property
+    def coverage_improvement(self) -> float:
+        """Calculate improvement in line coverage."""
+        return self.refactored.line_coverage - self.original.line_coverage
+    
+    @property
+    def quality_improvement(self) -> str:
+        """Assess overall quality improvement."""
+        if not self.original.success or not self.refactored.success:
+            return "error"
+        
+        mutation_improvement = self.mutation_score_improvement
+        if mutation_improvement > 0.05:  # 5% threshold
+            return "improved"
+        elif mutation_improvement < -0.05:
+            return "degraded"
+        else:
+            return "unchanged"
+    
+    def __str__(self) -> str:
+        return (f"PIT Comparison:\n"
+                f"  Mutation Score: {self.original.mutation_score:.1%} → {self.refactored.mutation_score:.1%} "
+                f"({self.mutation_score_improvement:+.1%})\n"
+                f"  Line Coverage: {self.original.line_coverage:.1%} → {self.refactored.line_coverage:.1%} "
+                f"({self.coverage_improvement:+.1%})")
 
 
 class PITTester:
@@ -67,19 +99,9 @@ class PITTester:
         self.executor = CommandExecutor(java_project_path)
         self.backup_manager = BackupManager()
         
-        # Detect build system
-        self.build_system = self._detect_build_system()
-        logger.info(f"Detected build system: {self.build_system}")
-    
-    def _detect_build_system(self) -> str:
-        """Detect whether the project uses Maven or Gradle."""
-        if (self.java_project_path / "pom.xml").exists():
-            return "maven"
-        elif (self.java_project_path / "build.gradle").exists() or \
-             (self.java_project_path / "build.gradle.kts").exists():
-            return "gradle"
-        else:
-            raise ValueError("Could not detect Maven or Gradle build system")
+        # Use the new build system abstraction
+        self.build_system = create_build_system(java_project_path)
+        logger.info(f"Detected build system: {self.build_system.get_build_system_name()}")
     
     def run_pit_baseline(self, test_class: str, test_method: str) -> PITResult:
         """
@@ -98,7 +120,8 @@ class PITTester:
         
         try:
             # Construct PIT command based on build system
-            if self.build_system == "maven":
+            build_system_name = self.build_system.get_build_system_name().lower()
+            if "maven" in build_system_name:
                 command = [
                     "mvn", "org.pitest:pitest-maven:mutationCoverage",
                     f"-DtargetClasses={test_class.replace('.', '/')}*",
@@ -106,12 +129,14 @@ class PITTester:
                     "-DoutputFormats=XML,HTML",
                     "-DwithHistory=false"
                 ]
-            else:  # gradle
+            elif "gradle" in build_system_name:
                 command = [
                     "./gradlew", "pitest",
                     f"-PtargetClasses={test_class.replace('.', '/')}*",
                     f"-PtargetTests={test_class}.{test_method}"
                 ]
+            else:
+                raise ValueError(f"Unsupported build system for PIT: {build_system_name}")
             
             # Execute PIT command
             success, output, error_output = self.executor.run_command(
@@ -244,15 +269,8 @@ class PITTester:
                 quality_assessment = "unchanged"
         
         return PITComparison(
-            project_name=original.test_class.split('.')[0] if '.' in original.test_class else "unknown",
-            test_class_name=original.test_class,
-            test_method_name=original.test_method,
-            strategy=strategy,
-            original_result=original,
-            refactored_result=refactored,
-            mutation_score_improvement=mutation_improvement,
-            coverage_improvement=coverage_improvement,
-            quality_improvement=quality_assessment
+            original=original,
+            refactored=refactored
         )
     
     def save_pit_results(self, comparisons: List[PITComparison], 
@@ -274,33 +292,33 @@ class PITTester:
         data = []
         for comp in comparisons:
             row = {
-                'project_name': comp.project_name,
-                'test_class_name': comp.test_class_name,
-                'test_method_name': comp.test_method_name,
-                'strategy': comp.strategy,
+                'project_name': project_name,
+                'test_class_name': comp.original.test_class,
+                'test_method_name': comp.original.test_method,
+                'strategy': strategy,
                 'quality_improvement': comp.quality_improvement,
                 'mutation_score_improvement': comp.mutation_score_improvement,
                 'coverage_improvement': comp.coverage_improvement,
                 
                 # Original results
-                'original_mutation_score': comp.original_result.mutation_score if comp.original_result else None,
-                'original_line_coverage': comp.original_result.line_coverage if comp.original_result else None,
-                'original_mutants_killed': comp.original_result.mutants_killed if comp.original_result else None,
-                'original_mutants_survived': comp.original_result.mutants_survived if comp.original_result else None,
-                'original_total_mutants': comp.original_result.total_mutants if comp.original_result else None,
-                'original_execution_time': comp.original_result.execution_time if comp.original_result else None,
-                'original_success': comp.original_result.success if comp.original_result else False,
-                'original_error': comp.original_result.error_message if comp.original_result else None,
+                'original_mutation_score': comp.original.mutation_score,
+                'original_line_coverage': comp.original.line_coverage,
+                'original_mutants_killed': comp.original.mutants_killed,
+                'original_mutants_survived': comp.original.mutants_survived,
+                'original_total_mutants': comp.original.total_mutants,
+                'original_execution_time': comp.original.execution_time,
+                'original_success': comp.original.success,
+                'original_error': comp.original.error_message if not comp.original.success else None,
                 
                 # Refactored results
-                'refactored_mutation_score': comp.refactored_result.mutation_score if comp.refactored_result else None,
-                'refactored_line_coverage': comp.refactored_result.line_coverage if comp.refactored_result else None,
-                'refactored_mutants_killed': comp.refactored_result.mutants_killed if comp.refactored_result else None,
-                'refactored_mutants_survived': comp.refactored_result.mutants_survived if comp.refactored_result else None,
-                'refactored_total_mutants': comp.refactored_result.total_mutants if comp.refactored_result else None,
-                'refactored_execution_time': comp.refactored_result.execution_time if comp.refactored_result else None,
-                'refactored_success': comp.refactored_result.success if comp.refactored_result else False,
-                'refactored_error': comp.refactored_result.error_message if comp.refactored_result else None,
+                'refactored_mutation_score': comp.refactored.mutation_score,
+                'refactored_line_coverage': comp.refactored.line_coverage,
+                'refactored_mutants_killed': comp.refactored.mutants_killed,
+                'refactored_mutants_survived': comp.refactored.mutants_survived,
+                'refactored_total_mutants': comp.refactored.total_mutants,
+                'refactored_execution_time': comp.refactored.execution_time,
+                'refactored_success': comp.refactored.success,
+                'refactored_error': comp.refactored.error_message if not comp.refactored.success else None,
             }
             data.append(row)
         

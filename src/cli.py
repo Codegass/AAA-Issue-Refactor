@@ -64,7 +64,9 @@ def find_discovery_file(java_project_path: Path, output_path: Path) -> Optional[
     return None
 
 
-def discovery_phase(java_project_path: Path, data_folder_path: Path, output_path: Path) -> Path:
+def discovery_phase(java_project_path: Path, data_folder_path: Path, output_path: Path,
+                   skip_build: bool = False, fallback_manual: bool = True, 
+                   build_timeout: int = 600) -> Path:
     """Phase 1: Test Discovery & Validation."""
     logger.info("Phase 1: Test Discovery & Validation")
     logger.info("=" * 50)
@@ -75,7 +77,7 @@ def discovery_phase(java_project_path: Path, data_folder_path: Path, output_path
     logger.info(f"Found {len(test_cases)} initial test cases")
 
     logger.info("Validating test cases...")
-    validated_cases = discovery.validate_test_cases(test_cases)
+    validated_cases = discovery.validate_test_cases(test_cases, skip_build, fallback_manual, build_timeout)
     runnable_count = sum(1 for tc in validated_cases if tc.runable == "yes")
     logger.info(f"Runnable test cases: {runnable_count}/{len(validated_cases)}")
 
@@ -186,7 +188,8 @@ def refactoring_phase(test_cases: List[TestCase], java_project_path: Path,
 
 
 def execution_test_phase(java_project_path: Path, output_path: Path, 
-                         debug_mode: bool = False, keep_files: bool = False) -> None:
+                         debug_mode: bool = False, keep_files: bool = False,
+                         skip_build: bool = False, fallback_manual: bool = True) -> None:
     """Phase 3: Execution Testing. Integrates and tests all refactored code."""
     logger.info("\nPhase 3: Execution Testing")
     logger.info("=" * 50)
@@ -201,9 +204,20 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
         logger.warning("No refactoring result files found. Skipping execution phase.")
         return
     
-    project_name = result_files[0].stem.replace("_refactored_result", "")
-    results_file = result_files[0]
-    logger.info(f"Found results file for project '{project_name}': {results_file}")
+    # Try to match the result file with the Java project name
+    java_project_name = java_project_path.name
+    target_result_file = output_path / f"{java_project_name}_refactored_result.csv"
+    
+    if target_result_file.exists():
+        results_file = target_result_file
+        project_name = java_project_name
+        logger.info(f"Found matching results file for project '{project_name}': {results_file}")
+    else:
+        # Fallback to first available file if exact match not found
+        results_file = result_files[0]
+        project_name = results_file.stem.replace("_refactored_result", "")
+        logger.warning(f"No exact match found for project '{java_project_name}', using: {results_file}")
+        logger.info(f"Available result files: {[f.name for f in result_files]}")
 
     df = pd.read_csv(results_file)
     df.fillna('', inplace=True)
@@ -212,9 +226,24 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
     recorder = ResultsRecorder(output_path)
     backup_mgr = BackupManager()
 
+    # Import and create build manager
+    from .build_system import SmartBuildManager
+    build_manager = SmartBuildManager(validator.build_system)
+
     # Get a unique list of all test files to back them up once
     all_test_paths = {p for p in df['test_path'].unique() if p and Path(p).exists()}
     backup_mgr.backup([Path(p) for p in all_test_paths])
+
+    # Initialize execution summary tracking
+    execution_summary = {
+        'total_strategies': 0,
+        'strategies_with_tests': 0,
+        'failed_compilation_modules': set(),
+        'compilation_failures': [],
+        'test_failures': [],
+        'successful_tests': [],
+        'total_tests_run': 0
+    }
 
     try:
         for strategy in recorder.STRATEGY_MAPPING.keys():
@@ -222,6 +251,8 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
             code_col = f'{prefix}_refactored_test_case_code'
             error_col = f'{prefix}_refactoring_error'
             result_col = f'{prefix}_refactored_test_case_result'
+            
+            execution_summary['total_strategies'] += 1
             
             if code_col not in df.columns:
                 continue
@@ -234,9 +265,39 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
                 logger.info("No successful refactorings to test for this strategy.")
                 continue
 
+            execution_summary['strategies_with_tests'] += 1
+
+            # Collect all files that will be modified for incremental compilation
+            modified_files = []
             for _, row in strategy_df.iterrows():
                 test_path = Path(row['test_path'])
-                logger.info(f"Testing {row['test_class_name']}.{row['test_method_name']}...")
+                if test_path.exists():
+                    modified_files.append(test_path)
+
+            # Ensure execution readiness with smart build management
+            if not skip_build:
+                logger.info("Verifying execution readiness...")
+                exec_ready, exec_message = build_manager.ensure_execution_ready(modified_files)
+                
+                if not exec_ready:
+                    logger.error(f"❌ Execution preparation failed: {exec_message}")
+                    logger.error("Please resolve build issues and try again.")
+                    
+                    # Track compilation failures
+                    if "compilation failed" in exec_message.lower():
+                        failed_modules = [msg.split("module ")[-1].split()[0] for msg in exec_message.split(";") 
+                                        if "compilation failed for module" in msg]
+                        execution_summary['failed_compilation_modules'].update(failed_modules)
+                    
+                    continue
+                
+                logger.info(f"✓ Execution environment ready: {exec_message}")
+
+            for _, row in strategy_df.iterrows():
+                test_path = Path(row['test_path'])
+                test_full_name = f"{row['test_class_name']}.{row['test_method_name']}"
+                logger.info(f"Testing {test_full_name}...")
+                execution_summary['total_tests_run'] += 1
                 
                 # We need to re-integrate code for each test, as previous integrations are reverted
                 # This is inefficient but safe. A better way would be to group by file.
@@ -257,9 +318,37 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
                 if not success:
                     logger.warning(f"  ✗ Code integration failed for {row['test_method_name']}.")
                     df.loc[df.index == row.name, result_col] = "integration_failed"
+                    execution_summary['test_failures'].append({
+                        'strategy': strategy,
+                        'test': test_full_name,
+                        'reason': 'Code integration failed'
+                    })
                     continue
 
                 test_path.write_text(modified_content, encoding='utf-8')
+                
+                # If incremental compilation is needed and not skipped, do it here
+                if not skip_build:
+                    compile_success, compile_output = build_manager.build_system.incremental_compile([test_path])
+                    if not compile_success:
+                        logger.warning(f"  ✗ Incremental compilation failed for {row['test_method_name']}.")
+                        df.loc[df.index == row.name, result_col] = "compilation_failed"
+                        execution_summary['test_failures'].append({
+                            'strategy': strategy,
+                            'test': test_full_name,
+                            'reason': 'Incremental compilation failed'
+                        })
+                        
+                        # Extract module name from test path
+                        for part in test_path.parts:
+                            if part in ['core', 'plugins'] or 'struts' in part or 'tiles' in part:
+                                module_name = part
+                                execution_summary['failed_compilation_modules'].add(module_name)
+                                break
+                        
+                        if debug_mode:
+                            logger.debug(f"Compile output:\n{compile_output}")
+                        continue
                 
                 # Discover test methods to run from the result CSV
                 method_names_col = f'{prefix}_refactored_method_names'
@@ -271,6 +360,11 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
                 if not refactored_methods:
                     logger.warning(f"  Could not find any refactored method names in result file.")
                     df.loc[df.index == row.name, result_col] = "no_test_found"
+                    execution_summary['test_failures'].append({
+                        'strategy': strategy,
+                        'test': test_full_name,
+                        'reason': 'No refactored methods found'
+                    })
                     continue
 
                 logger.info(f"  Running refactored test(s): {', '.join(refactored_methods)}")
@@ -286,6 +380,19 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
                 test_result = "pass" if all_passed else "fail"
                 logger.info(f"  ✓ Test result: {test_result.upper()}")
                 df.loc[df.index == row.name, result_col] = test_result
+                
+                if all_passed:
+                    execution_summary['successful_tests'].append({
+                        'strategy': strategy,
+                        'test': test_full_name,
+                        'methods': refactored_methods
+                    })
+                else:
+                    execution_summary['test_failures'].append({
+                        'strategy': strategy,
+                        'test': test_full_name,
+                        'reason': f'Test execution failed: {", ".join(refactored_methods)}'
+                    })
         
         # After all strategies are tested, save the final, updated dataframe
         df.to_csv(results_file, index=False, quoting=csv.QUOTE_ALL)
@@ -296,6 +403,73 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
             logger.info("Restoring all original files...")
             backup_mgr.restore_all()
         backup_mgr.cleanup()
+
+    # Display execution summary
+    _display_execution_summary(execution_summary, project_name)
+
+
+def _display_execution_summary(summary: dict, project_name: str) -> None:
+    """Display a comprehensive execution summary."""
+    logger.info("\n" + "=" * 60)
+    logger.info(f"EXECUTION SUMMARY FOR PROJECT: {project_name.upper()}")
+    logger.info("=" * 60)
+    
+    # Overall statistics
+    logger.info(f"📊 Overall Statistics:")
+    logger.info(f"   • Total strategies available: {summary['total_strategies']}")
+    logger.info(f"   • Strategies with tests: {summary['strategies_with_tests']}")
+    logger.info(f"   • Total tests attempted: {summary['total_tests_run']}")
+    logger.info(f"   • Successful tests: {len(summary['successful_tests'])}")
+    logger.info(f"   • Failed tests: {len(summary['test_failures'])}")
+    
+    # Compilation failures
+    if summary['failed_compilation_modules']:
+        logger.info(f"\n❌ Failed Compilation Modules:")
+        for module in sorted(summary['failed_compilation_modules']):
+            logger.info(f"   • {module}")
+    else:
+        logger.info(f"\n✅ No compilation failures detected")
+    
+    # Test failures breakdown
+    if summary['test_failures']:
+        logger.info(f"\n❌ Failed Test Cases:")
+        failure_by_reason = {}
+        for failure in summary['test_failures']:
+            reason = failure['reason']
+            if reason not in failure_by_reason:
+                failure_by_reason[reason] = []
+            failure_by_reason[reason].append(f"{failure['strategy']}: {failure['test']}")
+        
+        for reason, tests in failure_by_reason.items():
+            logger.info(f"   📋 {reason}:")
+            for test in tests:
+                logger.info(f"      • {test}")
+    
+    # Successful tests
+    if summary['successful_tests']:
+        logger.info(f"\n✅ Successful Test Cases:")
+        success_by_strategy = {}
+        for success in summary['successful_tests']:
+            strategy = success['strategy']
+            if strategy not in success_by_strategy:
+                success_by_strategy[strategy] = []
+            success_by_strategy[strategy].append({
+                'test': success['test'],
+                'methods': success['methods']
+            })
+        
+        for strategy, tests in success_by_strategy.items():
+            logger.info(f"   📋 {strategy.upper()} Strategy:")
+            for test_info in tests:
+                methods_str = ', '.join(test_info['methods'])
+                logger.info(f"      • {test_info['test']} → [{methods_str}]")
+    
+    # Success rate
+    if summary['total_tests_run'] > 0:
+        success_rate = (len(summary['successful_tests']) / summary['total_tests_run']) * 100
+        logger.info(f"\n📈 Success Rate: {success_rate:.1f}% ({len(summary['successful_tests'])}/{summary['total_tests_run']})")
+    
+    logger.info("=" * 60)
 
 
 def _extract_method_names_from_code(code: str) -> List[str]:
@@ -332,9 +506,20 @@ def show_refactored_phase(java_project_path: Path, output_path: Path, debug_mode
         logger.warning("No refactoring result files found. Please run refactoring phase first.")
         return
     
-    project_name = result_files[0].stem.replace("_refactored_result", "")
-    results_file = result_files[0]
-    logger.info(f"Found results file for project '{project_name}': {results_file}")
+    # Try to match the result file with the Java project name
+    java_project_name = java_project_path.name
+    target_result_file = output_path / f"{java_project_name}_refactored_result.csv"
+    
+    if target_result_file.exists():
+        results_file = target_result_file
+        project_name = java_project_name
+        logger.info(f"Found matching results file for project '{project_name}': {results_file}")
+    else:
+        # Fallback to first available file if exact match not found
+        results_file = result_files[0]
+        project_name = results_file.stem.replace("_refactored_result", "")
+        logger.warning(f"No exact match found for project '{java_project_name}', using: {results_file}")
+        logger.info(f"Available result files: {[f.name for f in result_files]}")
 
     df = pd.read_csv(results_file)
     df.fillna('', inplace=True)
@@ -410,15 +595,15 @@ def show_refactored_phase(java_project_path: Path, output_path: Path, debug_mode
                 if all_imports:
                     modified_content, _ = validator._add_imports(modified_content, all_imports)
                 
-                # Add refactored methods grouped by strategy (DO NOT comment out original)
+                # NEW LOGIC: Insert refactored methods after the original method (similar to execution phase)
                 lines = modified_content.split('\n')
-                insertion_line = validator._find_class_closing_brace(lines)
+                start_line, end_line = validator._find_method_span(lines, method_name)
                 
-                if insertion_line == -1:
-                    logger.error(f"    Could not find class closing brace")
+                if start_line == -1 or end_line == -1:
+                    logger.warning(f"    Could not find original method '{method_name}' in the file. Skipping.")
                     continue
                 
-                # Create comprehensive comment block
+                # Create comprehensive comment block for review
                 header_comment = f"""
 /*
  * ================================================================================
@@ -449,12 +634,13 @@ def show_refactored_phase(java_project_path: Path, output_path: Path, debug_mode
  */"""
                 code_blocks.append(footer_comment)
                 
-                # Insert all blocks
+                # Insert all blocks right after the original method (not at class end)
                 full_insertion = '\n'.join(code_blocks)
+                insertion_line = end_line + 1
                 lines.insert(insertion_line, full_insertion)
                 modified_content = '\n'.join(lines)
                 
-                logger.info(f"    ✓ Added {len(refactorings)} refactoring(s) for {method_name}")
+                logger.info(f"    ✓ Added {len(refactorings)} refactoring(s) for {method_name} (inserted after original method)")
             
             # Write modified content
             test_file_path.write_text(modified_content, encoding='utf-8')
@@ -679,6 +865,24 @@ Examples:
         help="Do not revert changes to Java files after test execution (useful with --debug)"
     )
 
+    # Build management options
+    parser.add_argument(
+        "--skip-build",
+        action="store_true",
+        help="Skip automatic build detection and assume project is already built"
+    )
+    parser.add_argument(
+        "--no-fallback-manual",
+        action="store_true",
+        help="Disable manual build fallback - fail immediately if automatic build fails"
+    )
+    parser.add_argument(
+        "--build-timeout",
+        type=int,
+        default=600,
+        help="Maximum time in seconds to wait for automatic build (default: 600)"
+    )
+
     parser.add_argument(
         "--input-file",
         dest="input_file_path",
@@ -741,7 +945,7 @@ Examples:
         discovery_output_file = None
         if args.discovery_only:
             logger.info("\nMode: Discovery Only")
-            discovery_phase(java_path, data_path, output_path)
+            discovery_phase(java_path, data_path, output_path, args.skip_build, not args.no_fallback_manual, args.build_timeout)
             
         elif args.refactor_only:
             logger.info(f"\nMode: Refactor Only ({args.rftype.upper()} strategy)")
@@ -761,7 +965,7 @@ Examples:
             
         elif args.execution_test_only:
             logger.info("\nMode: Execution Test Only")
-            execution_test_phase(java_path, output_path, args.debug, args.keep_files)
+            execution_test_phase(java_path, output_path, args.debug, args.keep_files, args.skip_build, not args.no_fallback_manual)
             
         elif args.pit_test_only:
             logger.info(f"\nMode: PIT Test Only ({args.rftype.upper()} strategy)")
@@ -780,7 +984,7 @@ Examples:
             logger.info("\nMode: Full Pipeline")
             
             # Phase 1: Discovery
-            discovery_output_file = discovery_phase(java_path, data_path, output_path)
+            discovery_output_file = discovery_phase(java_path, data_path, output_path, args.skip_build, not args.no_fallback_manual, args.build_timeout)
             test_cases = load_test_cases_from_csv(discovery_output_file)
             
             # Phase 2: Refactoring (for each specified strategy, or default to 'aaa')
@@ -794,7 +998,7 @@ Examples:
                 refactoring_phase(test_cases, java_path, data_path, output_path, strategy, args.debug)
             
             # Phase 3: Execution Testing
-            execution_test_phase(java_path, output_path, args.debug, args.keep_files)
+            execution_test_phase(java_path, output_path, args.debug, args.keep_files, args.skip_build, not args.no_fallback_manual)
             
             # Phase 4: PIT Testing
             for strategy in strategies_to_run:

@@ -2,7 +2,7 @@
 
 <div align="center">
 
-<img src="./logo.jpg" alt="RepoDigger Icon" width="33%"/>
+<img src="./logo.jpg" alt="aif-logo" width="100%"/>
 
 [![Python](https://img.shields.io/badge/Python-3.13%2B-blue.svg)](https://www.python.org/downloads/)
 [![OpenAI](https://img.shields.io/badge/OpenAI-o4--mini-green.svg)](https://openai.com/)

@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Optional, Tuple, List
 import logging
 
+from .build_system import create_build_system, BuildSystem
+
 logger = logging.getLogger('aif')
 
 class CodeValidator:
@@ -13,17 +15,9 @@ class CodeValidator:
     
     def __init__(self, java_project_path: Path):
         self.java_project_path = java_project_path
-    
-    def _detect_build_system(self) -> str:
-        """Detect the build system used by the project."""
-        if (self.java_project_path / "pom.xml").exists():
-            return "Maven"
-        elif (self.java_project_path / "build.gradle").exists():
-            return "Gradle (build.gradle)"
-        elif (self.java_project_path / "build.gradle.kts").exists():
-            return "Gradle (build.gradle.kts)"
-        else:
-            return "Unknown (no pom.xml or build.gradle found)"
+        self.build_system = create_build_system(java_project_path)
+        
+        logger.debug(f"Initialized CodeValidator with {self.build_system.get_build_system_name()} build system")
     
     def integrate_refactored_method(
         self,
@@ -39,9 +33,8 @@ class CodeValidator:
         Integrates refactored code into the original test file non-destructively.
 
         - Adds new imports.
-        - Appends the refactored method(s) to the class.
-        - If it's a one-to-one refactoring, the original method is commented out.
-        - If it's a one-to-many refactoring (e.g., splitting a test), the original method is deleted.
+        - For one-to-one refactoring: comments out the original method and inserts refactored code right after it.
+        - For one-to-many refactoring: deletes the original method and inserts refactored code at the same location.
 
         Args:
             test_file_path: Path to the Java test file.
@@ -68,32 +61,31 @@ class CodeValidator:
                 if not success:
                     logger.warning(f"  Could not add new imports to '{test_file_path}'.")
 
-            # Step 2: Handle the original method (comment or delete)
-            if is_one_to_many:
-                # For one-to-many, we delete the original method entirely
-                modified_content, success = self._delete_method(modified_content, original_method_name)
-                if not success:
-                    logger.error(f"  Could not find and delete original method '{original_method_name}' for one-to-many refactoring.")
-                    return False, original_content, []
-            else:
-                # For one-to-one, we find and comment out the original method
-                modified_content, success = self._comment_out_method(modified_content, original_method_name)
-                if not success:
-                    logger.warning(f"  Could not find and comment out original method '{original_method_name}'. It may have been modified or removed.")
+            # Step 2: Find the original method location first
+            lines = modified_content.split('\n')
+            start_line, end_line = self._find_method_span(lines, original_method_name)
+            
+            if start_line == -1 or end_line == -1:
+                logger.error(f"  Could not find original method '{original_method_name}' in the file.")
+                return False, original_content, []
 
             # Step 3: Prepare the new code block for insertion
             separator_start = f"// --- Start Refactored by {strategy} from {original_method_name} ---"
             separator_end = f"// --- End Refactored by {strategy} ---"
             code_to_insert = f"\n{separator_start}\n{refactored_code}\n{separator_end}\n"
 
-            # Step 4: Find the insertion point (the closing brace of the class)
-            lines = modified_content.split('\n')
-            insertion_line = self._find_class_closing_brace(lines)
-            if insertion_line == -1:
-                logger.error(f"  Could not find class closing brace in '{test_file_path}'.")
-                return False, original_content, []
+            # Step 4: Handle the original method and insert refactored code
+            if is_one_to_many:
+                # For one-to-many, delete the original method and insert refactored code at the same location
+                del lines[start_line : end_line + 1]
+                insertion_line = start_line
+            else:
+                # For one-to-one, comment out the original method and insert refactored code right after it
+                for i in range(start_line, end_line + 1):
+                    lines[i] = "// " + lines[i]
+                insertion_line = end_line + 1
             
-            # Insert the new code block before the class's closing brace
+            # Insert the new code block
             lines.insert(insertion_line, code_to_insert)
             final_content = '\n'.join(lines)
             
@@ -233,232 +225,31 @@ class CodeValidator:
         return -1
     
     def compile_java_project(self) -> Tuple[bool, str]:
-        """Compile and install the Java project to handle multi-module dependencies."""
+        """Compile the Java project using the appropriate build system."""
         debug_logger = logging.getLogger('aif')
-        build_system = self._detect_build_system()
         
         if debug_logger.isEnabledFor(logging.DEBUG):
-            debug_logger.debug(f"Starting project build and install...")
+            debug_logger.debug(f"Starting project build using {self.build_system.get_build_system_name()}...")
             debug_logger.debug(f"Project path: {self.java_project_path}")
-            debug_logger.debug(f"Detected build system: {build_system}")
         
-        try:
-            command = []
-            # Try Maven first
-            if (self.java_project_path / "pom.xml").exists():
-                # Use 'install' to build all modules and place them in the local Maven repo.
-                # This is crucial for multi-module projects to resolve inter-module dependencies.
-                command = [
-                    "mvn", "clean", "install", 
-                    "-DskipTests=true",                   # Don't run tests, just build and install
-                    "-Drat.skip=true",                    # Skip Apache RAT checks
-                    "-Dmaven.javadoc.skip=true",          # Skip javadoc generation  
-                    "-Dcheckstyle.skip=true",             # Skip checkstyle
-                    "-Dpmd.skip=true",                    # Skip PMD
-                    "-Dspotbugs.skip=true",               # Skip SpotBugs
-                    "-Denforcer.skip=true",               # Skip enforcer rules
-                    "-Djacoco.skip=true",                 # Skip code coverage
-                    "-Dossindex.skip=true",               # Skip ossindex security audit
-                    "-Derrorprone.skip=true",             # Skip Google errorprone checks
-                    "-Dspotless.skip=true",               # Skip spotless formatting
-                    "-Dlicense.skip=true",                # Skip license checks
-                    "-Dforbiddenapis.skip=true",          # Skip forbidden APIs check
-                    "-Danimal.sniffer.skip=true",         # Skip animal sniffer
-                    "-Dmaven.compiler.failOnError=false", # Don't fail on compilation errors
-                    "-Dmaven.compiler.failOnWarning=false", # Don't fail on warnings
-                    "-T", "1C",                           # Use 1 thread per CPU core for faster builds
-                    "-q"                                  # Quiet mode to reduce output noise
-                ]
-                
-                if debug_logger.isEnabledFor(logging.DEBUG):
-                    debug_logger.debug(f"Using Maven command: {' '.join(command)}")
-                
-                result = subprocess.run(
-                    command,
-                    cwd=self.java_project_path,
-                    capture_output=True,
-                    text=True,
-                    timeout=600  # Increase timeout for large projects
-                )
-                
-                if debug_logger.isEnabledFor(logging.DEBUG):
-                    debug_logger.debug(f"Maven exit code: {result.returncode}")
-                    debug_logger.debug(f"Maven stdout:\n{result.stdout}")
-                    debug_logger.debug(f"Maven stderr:\n{result.stderr}")
-                
-                return result.returncode == 0, result.stderr
-            
-            # Try Gradle
-            elif (self.java_project_path / "build.gradle").exists() or (self.java_project_path / "build.gradle.kts").exists():
-                command = ["./gradlew", "clean", "compileJava", "compileTestJava"]
-                if debug_logger.isEnabledFor(logging.DEBUG):
-                    debug_logger.debug(f"Using Gradle command: {' '.join(command)}")
-                
-                result = subprocess.run(
-                    command,
-                    cwd=self.java_project_path,
-                    capture_output=True,
-                    text=True,
-                    timeout=300
-                )
-                
-                if debug_logger.isEnabledFor(logging.DEBUG):
-                    debug_logger.debug(f"Gradle exit code: {result.returncode}")
-                    debug_logger.debug(f"Gradle stdout:\n{result.stdout}")
-                    debug_logger.debug(f"Gradle stderr:\n{result.stderr}")
-                
-                return result.returncode == 0, result.stderr
-            
-            else:
-                error_msg = "No Maven pom.xml or Gradle build file found"
-                if debug_logger.isEnabledFor(logging.DEBUG):
-                    debug_logger.debug(f"Build system detection failed: {error_msg}")
-                return False, error_msg
-                
-        except subprocess.TimeoutExpired:
-            error_msg = "Compilation timeout"
-            if debug_logger.isEnabledFor(logging.DEBUG):
-                debug_logger.debug(f"Build process timed out after 300 seconds")
-                debug_logger.debug(f"Command that timed out: {' '.join(command) if command else 'N/A'}")
-            return False, error_msg
-        except Exception as e:
-            error_msg = f"Compilation error: {str(e)}"
-            if debug_logger.isEnabledFor(logging.DEBUG):
-                debug_logger.debug(f"Build process exception: {str(e)}")
-                debug_logger.debug(f"Command that failed: {' '.join(command) if command else 'N/A'}")
-            return False, error_msg
+        return self.build_system.compile_project()
     
     def run_specific_test(self, test_class: str, test_method: str, test_file_path: Optional[Path] = None) -> Tuple[bool, str]:
-        """Run a specific test method. For multi-module projects, runs from the module directory."""
+        """Run a specific test method using the appropriate build system."""
         debug_logger = logging.getLogger('aif')
         
         if debug_logger.isEnabledFor(logging.DEBUG):
-            debug_logger.debug(f"Running test: {test_class}.{test_method}")
+            debug_logger.debug(f"Running test using {self.build_system.get_build_system_name()}: {test_class}.{test_method}")
             debug_logger.debug(f"Project path: {self.java_project_path}")
             if test_file_path:
                 debug_logger.debug(f"Test file path: {test_file_path}")
         
-        # Determine the working directory for test execution
-        working_dir = self.java_project_path
-        if test_file_path:
-            # For multi-module projects, find the module root containing the test
-            module_root = self._find_module_root(test_file_path)
-            if module_root and module_root != self.java_project_path:
-                working_dir = module_root
-                if debug_logger.isEnabledFor(logging.DEBUG):
-                    debug_logger.debug(f"Using module directory for test execution: {working_dir}")
-        
-        try:
-            command = []
-            # Try Maven first
-            if (working_dir / "pom.xml").exists():
-                test_spec = f"{test_class}#{test_method}"
-                command = [
-                    "mvn", "surefire:test", 
-                    f"-Dtest={test_spec}", 
-                    "-DfailIfNoTests=false",
-                    "-Dmaven.test.failure.ignore=true",
-                    "-Drat.skip=true",
-                    "-Dossindex.skip=true",
-                    "-Derrorprone.skip=true",
-                    "-Dspotless.skip=true",
-                    "-Dlicense.skip=true",
-                    "-Dforbiddenapis.skip=true",
-                    "-Danimal.sniffer.skip=true",
-                    "-Dmaven.compiler.failOnError=false",
-                    "-Dmaven.compiler.failOnWarning=false"
-                ]
-                
-                if debug_logger.isEnabledFor(logging.DEBUG):
-                    debug_logger.debug(f"Using Maven test command in {working_dir}: {' '.join(command)}")
-                
-                result = subprocess.run(
-                    command,
-                    cwd=working_dir,
-                    capture_output=True,
-                    text=True,
-                    timeout=300
-                )
-                
-                output = result.stdout + result.stderr
-                
-                if debug_logger.isEnabledFor(logging.DEBUG):
-                    debug_logger.debug(f"Maven test exit code: {result.returncode}")
-                    debug_logger.debug(f"Maven test output:\n{output}")
-                
-                # A successful BUILD is the first gate. Real pass/fail is checked next.
-                if "BUILD SUCCESS" not in output:
-                    return False, output
-
-                # Check for actual test results
-                # Example: Tests run: 1, Failures: 0, Errors: 0
-                match = re.search(r'Tests run: (\d+), Failures: (\d+), Errors: (\d+)', output)
-                if match:
-                    runs, failures, errors = map(int, match.groups())
-                    if debug_logger.isEnabledFor(logging.DEBUG):
-                        debug_logger.debug(f"Test results: {runs} runs, {failures} failures, {errors} errors")
-                    if runs > 0 and failures == 0 and errors == 0:
-                        return True, output  # Test ran and passed
-
-                return False, output # Test failed, had errors, or did not run
-            
-            # Try Gradle (check in working directory)
-            elif (working_dir / "build.gradle").exists() or (working_dir / "build.gradle.kts").exists():
-                test_spec = f"{test_class}.{test_method}"
-                command = ["./gradlew", "test", f"--tests", test_spec]
-                
-                if debug_logger.isEnabledFor(logging.DEBUG):
-                    debug_logger.debug(f"Using Gradle test command in {working_dir}: {' '.join(command)}")
-                
-                result = subprocess.run(
-                    command,
-                    cwd=working_dir,
-                    capture_output=True,
-                    text=True,
-                    timeout=300
-                )
-                
-                output = result.stdout + result.stderr
-                
-                if debug_logger.isEnabledFor(logging.DEBUG):
-                    debug_logger.debug(f"Gradle test exit code: {result.returncode}")
-                    debug_logger.debug(f"Gradle test output:\n{output}")
-                
-                return result.returncode == 0, output
-            
-            else:
-                error_msg = f"No Maven pom.xml or Gradle build file found in working directory: {working_dir}"
-                if debug_logger.isEnabledFor(logging.DEBUG):
-                    debug_logger.debug(f"Test execution failed: {error_msg}")
-                return False, error_msg
-                
-        except subprocess.TimeoutExpired:
-            error_msg = "Test execution timeout"
-            if debug_logger.isEnabledFor(logging.DEBUG):
-                debug_logger.debug(f"Test execution timed out after 300 seconds")
-                debug_logger.debug(f"Command that timed out: {' '.join(command) if command else 'N/A'}")
-            return False, error_msg
-        except Exception as e:
-            error_msg = f"Test execution error: {str(e)}"
-            if debug_logger.isEnabledFor(logging.DEBUG):
-                debug_logger.debug(f"Test execution exception: {str(e)}")
-                debug_logger.debug(f"Command that failed: {' '.join(command) if command else 'N/A'}")
-            return False, error_msg
+        return self.build_system.run_specific_test(test_class, test_method, test_file_path)
     
-    def _find_module_root(self, test_file_path: Path) -> Optional[Path]:
-        """Find the Maven/Gradle module root directory containing the test file."""
-        current_dir = test_file_path.parent
-        
-        # Walk up the directory tree looking for pom.xml or build.gradle
-        while current_dir != current_dir.parent:  # Stop at filesystem root
-            # Check for Maven module
-            if (current_dir / "pom.xml").exists():
-                return current_dir
-            
-            # Check for Gradle module  
-            if (current_dir / "build.gradle").exists() or (current_dir / "build.gradle.kts").exists():
-                return current_dir
-            
-            current_dir = current_dir.parent
-        
-        return None
+    def get_build_system_name(self) -> str:
+        """Get the name of the build system being used."""
+        return self.build_system.get_build_system_name()
+    
+    def clean_project(self) -> Tuple[bool, str]:
+        """Clean the project using the appropriate build system."""
+        return self.build_system.clean_project()

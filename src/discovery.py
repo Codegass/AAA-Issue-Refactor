@@ -53,30 +53,72 @@ class TestDiscovery:
         
         return test_cases
     
-    def find_test_file(self, test_class_name: str) -> Optional[Path]:
-        """Find the Java test file for a given test class, supporting multi-module projects."""
+    def find_test_file(self, test_class_name: str, method_name: Optional[str] = None) -> Optional[Path]:
+        """Find the Java test file for a given test class, supporting multi-module projects.
+        
+        Args:
+            test_class_name: Fully qualified class name (e.g., org.apache.tika.parser.html.HtmlParserTest)
+            method_name: Optional test method name for verification
+            
+        Returns:
+            Path to the correct test file, or None if not found
+        """
         # Convert fully qualified class name to file path
         class_path_parts = test_class_name.split('.')
         class_file_name = class_path_parts[-1] + '.java'
         full_class_path = '/'.join(class_path_parts) + '.java'
         
+        logger.debug(f"Searching for test file: {test_class_name}")
+        if method_name:
+            logger.debug(f"  Target method: {method_name}")
+        
         # Strategy 1: Direct search using glob pattern for the exact file name
         # This is faster and works for most cases
         for pattern in [f"**/*/{class_file_name}", f"**/src/test/java/**/{class_file_name}"]:
             matching_files = list(self.java_project_path.glob(pattern))
+            logger.debug(f"  Pattern '{pattern}' found {len(matching_files)} files")
             
-            # Filter to find exact matches based on package structure
+            if not matching_files:
+                continue
+                
+            # Strategy 1a: Find exact matches based on package structure
+            exact_matches = []
             for file_path in matching_files:
-                # Check if the file path matches the expected package structure
                 file_path_str = str(file_path)
                 if full_class_path in file_path_str:
-                    logger.debug(f"Found test file using pattern '{pattern}': {file_path}")
-                    return file_path
+                    exact_matches.append(file_path)
+                    logger.debug(f"    Exact package match: {file_path}")
             
-            # If no exact match, try the first match (fallback)
+            # Strategy 1b: If we have method name, verify which file contains the method
+            if method_name and len(exact_matches) > 1:
+                logger.debug(f"    Multiple exact matches found, verifying method '{method_name}'...")
+                for file_path in exact_matches:
+                    if self._file_contains_method(file_path, method_name):
+                        logger.debug(f"    ✓ Method verified in: {file_path}")
+                        return file_path
+                    else:
+                        logger.debug(f"    ✗ Method not found in: {file_path}")
+            elif exact_matches:
+                # Single exact match or no method to verify
+                chosen_file = exact_matches[0]
+                logger.debug(f"Found test file using exact package match: {chosen_file}")
+                return chosen_file
+            
+            # Strategy 1c: If no exact package match, verify method in all candidates
+            if method_name:
+                logger.debug(f"    No exact package matches, checking method in all {len(matching_files)} files...")
+                for file_path in matching_files:
+                    if self._file_contains_method(file_path, method_name):
+                        logger.debug(f"    ✓ Method found in: {file_path}")
+                        return file_path
+                    else:
+                        logger.debug(f"    ✗ Method not found in: {file_path}")
+            
+            # Strategy 1d: Last resort - use first match (old behavior)
             if matching_files:
-                logger.debug(f"Using first match from pattern '{pattern}': {matching_files[0]}")
-                return matching_files[0]
+                chosen_file = matching_files[0]
+                logger.debug(f"Using first match from pattern '{pattern}': {chosen_file}")
+                return chosen_file
         
         # Strategy 2: Traditional directory-based search (legacy support)
         # Search in common test directories at project root
@@ -103,6 +145,41 @@ class TestDiscovery:
         
         logger.debug(f"Test file not found for class: {test_class_name}")
         return None
+    
+    def _file_contains_method(self, file_path: Path, method_name: str) -> bool:
+        """Check if a Java file contains a specific test method.
+        
+        Args:
+            file_path: Path to the Java file
+            method_name: Method name to search for
+            
+        Returns:
+            True if the method is found in the file
+        """
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Look for method signatures with various patterns:
+            # 1. @Test annotation followed by method
+            # 2. Direct method declaration
+            import re
+            
+            # Pattern 1: @Test annotation somewhere before method declaration
+            test_annotation_pattern = r'@Test\s*(?:\([^)]*\))?\s*(?:public\s+)?(?:static\s+)?void\s+' + re.escape(method_name) + r'\s*\('
+            if re.search(test_annotation_pattern, content, re.MULTILINE | re.DOTALL):
+                return True
+            
+            # Pattern 2: Simple method declaration
+            method_pattern = r'(?:public\s+)?(?:static\s+)?void\s+' + re.escape(method_name) + r'\s*\('
+            if re.search(method_pattern, content, re.MULTILINE):
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Error reading file {file_path}: {e}")
+            return False
     
     def count_lines_of_code(self, file_path: Path, method_name: str) -> int:
         """Count lines of code for a specific test method."""
@@ -134,39 +211,35 @@ class TestDiscovery:
         except Exception:
             return 1
     
-    def validate_test_cases(self, test_cases: List[TestCase]) -> List[TestCase]:
-        """Validate test cases by finding files and checking executability using multithreading."""
+    def validate_test_cases(self, test_cases: List[TestCase], skip_build: bool = False,
+                          fallback_manual: bool = True, build_timeout: int = 600) -> List[TestCase]:
+        """Validate test cases by finding files and checking executability using smart build management."""
         from .validator import CodeValidator
+        from .build_system import SmartBuildManager
         
         validator = CodeValidator(self.java_project_path)
+        build_manager = SmartBuildManager(validator.build_system)
         
-        logger.info("Performing initial project build...")
-        compile_success, compile_output = validator.compile_java_project()
-        if not compile_success:
-            logger.warning("Initial project build failed. Continuing with file discovery only.")
-            logger.warning(f"Build output:\n{compile_output}")
-            
-            # In debug mode, provide more detailed build failure information
-            debug_logger = logging.getLogger('aif')
-            if debug_logger.isEnabledFor(logging.DEBUG):
-                logger.debug("=" * 60)
-                logger.debug("DETAILED BUILD FAILURE ANALYSIS")
-                logger.debug("=" * 60)
-                logger.debug(f"Project path: {self.java_project_path}")
-                logger.debug(f"Build system detected: {validator._detect_build_system()}")
-                logger.debug(f"Full build output:\n{compile_output}")
-                logger.debug("=" * 60)
-            
-            # Continue with file discovery even if build fails
-            logger.info("⚠ Build failed, but will still attempt to find test files for inspection")
+        logger.info("Ensuring project is properly built...")
+        
+        # Use smart build management
+        build_success, build_message = build_manager.ensure_project_built(
+            skip_build=skip_build,
+            fallback_manual=fallback_manual,
+            timeout=build_timeout
+        )
+        
+        if not build_success:
+            logger.warning(f"⚠ Build verification failed: {build_message}")
+            logger.warning("⚠ Continuing with file discovery only (tests marked as non-runnable)")
             build_failed = True
         else:
-            logger.info("✓ Initial project build successful.")
+            logger.info(f"✓ Build verification successful: {build_message}")
             build_failed = False
 
         # Define a worker function for each thread
         def _validate_worker(test_case: TestCase) -> TestCase:
-            test_file = self.find_test_file(test_case.test_class_name)
+            test_file = self.find_test_file(test_case.test_class_name, test_case.test_method_name)
             if test_file:
                 test_case.test_path = str(test_file)
                 test_case.test_case_loc = self.count_lines_of_code(test_file, test_case.test_method_name)
@@ -235,7 +308,7 @@ class TestDiscovery:
         
         if build_failed:
             logger.info(f"Found test files: {found_files}/{len(validated_cases)}")
-            logger.info(f"Note: All tests marked as non-runnable due to build failure")
+            logger.info(f"Note: All tests marked as non-runnable due to build issues")
         else:
             logger.info(f"Runnable test cases: {runnable_cases}/{len(validated_cases)}")
         

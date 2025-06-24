@@ -1,6 +1,7 @@
 """Test execution and results recording."""
 
 import csv
+import json
 import time
 import pandas as pd
 from pathlib import Path
@@ -53,6 +54,65 @@ class ResultsRecorder:
         for strategy in self.STRATEGY_MAPPING.keys():
             columns.extend(self.get_strategy_columns(strategy))
         return columns
+
+    def _save_chat_history(self, project_name: str, test_class_name: str, test_method_name: str, 
+                          strategy: str, chat_history: str) -> str:
+        """
+        Save chat history to a readable text file and return relative path.
+        
+        Args:
+            project_name: Name of the project
+            test_class_name: Full class name (e.g., org.apache.commons.cli.bug.BugsTest)
+            test_method_name: Test method name
+            strategy: Refactoring strategy (aaa, dsl, testsmell)
+            chat_history: JSON string of chat history
+            
+        Returns:
+            Relative path to the saved log file
+        """
+        if not chat_history or chat_history.strip() == "":
+            return ""
+        
+        # Create chat history directory
+        chat_dir = self.output_path / f"{project_name}_chat_history"
+        chat_dir.mkdir(exist_ok=True)
+        
+        # Extract simple class name from full class name
+        simple_class_name = test_class_name.split('.')[-1] if '.' in test_class_name else test_class_name
+        
+        # Create filename with .log extension for better readability
+        filename = f"{strategy}-{simple_class_name}-{test_method_name}.log"
+        chat_file = chat_dir / filename
+        
+        try:
+            # Parse chat history from JSON string
+            if isinstance(chat_history, str):
+                chat_data = json.loads(chat_history)
+            else:
+                chat_data = chat_history
+                
+            # Write to a human-readable log file
+            with open(chat_file, 'w', encoding='utf-8') as f:
+                for message in chat_data:
+                    role = message.get("role", "unknown").upper()
+                    content = message.get("content", "")
+                    f.write(f"================= ROLE: {role} =================\n\n")
+                    f.write(content)
+                    f.write("\n\n")
+            
+            # Return relative path from output directory
+            return f"{project_name}_chat_history/{filename}"
+            
+        except (json.JSONDecodeError, Exception) as e:
+            # If parsing fails, save as plain text with error note
+            error_filename = f"{strategy}-{simple_class_name}-{test_method_name}.error.log"
+            error_file_path = chat_dir / error_filename
+            with open(error_file_path, 'w', encoding='utf-8') as f:
+                f.write(f"Failed to parse and save chat history: {str(e)}\n\n")
+                f.write("================= RAW CONTENT =================\n\n")
+                f.write(str(chat_history))
+            
+            return f"{project_name}_chat_history/{error_filename}"
 
     def save_results(self, project_name: str, strategy: str, results: List[Dict[str, Any]]) -> Path:
         """Saves/updates results for a specific strategy into the wide-table CSV."""
@@ -112,6 +172,17 @@ class ResultsRecorder:
         """Creates a result record dictionary for a specific strategy."""
         prefix = self.STRATEGY_MAPPING.get(strategy, strategy)
         
+        # Save chat history to external JSON file and get relative path
+        chat_history_path = ""
+        if refactoring_result.chat_history:
+            chat_history_path = self._save_chat_history(
+                test_case.project_name,
+                test_case.test_class_name,
+                test_case.test_method_name,
+                strategy,
+                refactoring_result.chat_history
+            )
+        
         record = {
             'project_name': test_case.project_name,
             'test_class_name': test_case.test_class_name,
@@ -135,7 +206,7 @@ class ResultsRecorder:
             f'{prefix}_refactoring_cost': refactoring_result.cost,
             f'{prefix}_refactoring_time': refactoring_result.processing_time,
             f'{prefix}_refactoring_error': refactoring_result.error_message or "",
-            f'{prefix}_refactoring_chat_history': refactoring_result.chat_history or ""
+            f'{prefix}_refactoring_chat_history': chat_history_path  # Now stores relative path instead of full JSON
         })
         
         return record
