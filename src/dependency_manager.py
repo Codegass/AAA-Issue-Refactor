@@ -39,49 +39,156 @@ class DependencyManager:
             return "unknown"
     
     def add_hamcrest_dependency(self) -> Tuple[bool, str]:
-        """Add Hamcrest dependency to the project temporarily."""
+        """Add Hamcrest dependency to the project and ALL submodules."""
         if self.build_system == "maven":
-            return self._add_hamcrest_maven()
+            return self._add_hamcrest_maven_all_modules()
         elif self.build_system == "gradle":
-            return self._add_hamcrest_gradle()
+            return self._add_hamcrest_gradle_all_modules()
         else:
             return False, f"Unsupported build system: {self.build_system}"
     
-    def _add_hamcrest_maven(self) -> Tuple[bool, str]:
-        """Add Hamcrest dependency to Maven pom.xml using minimal string modification."""
-        # Only modify the root pom.xml, not all sub-modules
-        root_pom = self.project_path / "pom.xml"
-        if not root_pom.exists():
-            return False, "Root pom.xml not found"
+    def _add_hamcrest_maven_all_modules(self) -> Tuple[bool, str]:
+        """Add Hamcrest dependency to all Maven pom.xml files found in the project."""
+        # Find all pom.xml files in the project
+        all_poms = list(self.project_path.glob("**/pom.xml"))
         
-        try:
-            # Backup original file
-            self._backup_file(root_pom)
-            
-            content = root_pom.read_text(encoding='utf-8')
-            
-            # Check if hamcrest is already present (more comprehensive check)
-            if self._is_hamcrest_present_maven(content):
-                logger.debug("Hamcrest already present in root pom.xml")
-                return True, "Hamcrest dependency already present"
-            
-            # Check if our marker is already present (we added it before)
-            if self.MAVEN_START_MARKER in content:
-                logger.debug("Our Hamcrest dependency already added")
-                return True, "Hamcrest dependency already added by tool"
-            
-            # Find dependencies section and add hamcrest with minimal modification
-            modified_content = self._insert_hamcrest_maven_minimal(content)
-            
-            if modified_content != content:
-                root_pom.write_text(modified_content, encoding='utf-8')
-                return True, "Added Hamcrest to root pom.xml with minimal modification"
-            else:
-                return False, "Could not find appropriate location to add Hamcrest dependency"
+        if not all_poms:
+            return False, "No pom.xml files found"
+        
+        logger.info(f"Found {len(all_poms)} pom.xml files to process")
+        
+        modified_files = []
+        already_present = []
+        failed_files = []
+        
+        for pom_file in all_poms:
+            try:
+                # Skip backup directories to avoid modifying backups
+                if '.aif_backup' in str(pom_file) or 'backup' in str(pom_file).lower():
+                    continue
                 
-        except Exception as e:
-            logger.error(f"Failed to modify {root_pom}: {e}")
-            return False, f"Error modifying pom.xml: {e}"
+                relative_path = pom_file.relative_to(self.project_path)
+                logger.debug(f"Processing: {relative_path}")
+                
+                # Backup original file
+                self._backup_file(pom_file)
+                
+                content = pom_file.read_text(encoding='utf-8')
+                
+                # Check if hamcrest is already present
+                if self._is_hamcrest_present_maven(content):
+                    logger.debug(f"  Hamcrest already present in {relative_path}")
+                    already_present.append(str(relative_path))
+                    continue
+                
+                # Check if our marker is already present
+                if self.MAVEN_START_MARKER in content:
+                    logger.debug(f"  Our Hamcrest already added to {relative_path}")
+                    already_present.append(str(relative_path))
+                    continue
+                
+                # Try to add hamcrest
+                modified_content = self._insert_hamcrest_maven_minimal(content)
+                
+                if modified_content != content:
+                    pom_file.write_text(modified_content, encoding='utf-8')
+                    modified_files.append(str(relative_path))
+                    logger.debug(f"  ✓ Added Hamcrest to {relative_path}")
+                else:
+                    logger.debug(f"  ✗ Could not modify {relative_path}")
+                    failed_files.append(str(relative_path))
+                    
+            except Exception as e:
+                logger.error(f"Failed to process {pom_file}: {e}")
+                failed_files.append(str(pom_file.relative_to(self.project_path)))
+        
+        # Create summary message
+        summary_parts = []
+        if modified_files:
+            summary_parts.append(f"Added to {len(modified_files)} modules: {', '.join(modified_files[:3])}" + 
+                                ("..." if len(modified_files) > 3 else ""))
+        if already_present:
+            summary_parts.append(f"Already present in {len(already_present)} modules")
+        if failed_files:
+            summary_parts.append(f"Failed to modify {len(failed_files)} modules")
+        
+        if modified_files or already_present:
+            return True, "; ".join(summary_parts)
+        else:
+            return False, f"Failed to add Hamcrest to any modules: {'; '.join(summary_parts)}"
+    
+    def _add_hamcrest_gradle_all_modules(self) -> Tuple[bool, str]:
+        """Add Hamcrest dependency to all Gradle build files found in the project."""
+        # Find all build.gradle and build.gradle.kts files
+        gradle_files = list(self.project_path.glob("**/build.gradle")) + \
+                      list(self.project_path.glob("**/build.gradle.kts"))
+        
+        if not gradle_files:
+            return False, "No build.gradle files found"
+        
+        logger.info(f"Found {len(gradle_files)} Gradle build files to process")
+        
+        modified_files = []
+        already_present = []
+        failed_files = []
+        
+        for gradle_file in gradle_files:
+            try:
+                # Skip backup directories
+                if '.aif_backup' in str(gradle_file) or 'backup' in str(gradle_file).lower():
+                    continue
+                
+                relative_path = gradle_file.relative_to(self.project_path)
+                logger.debug(f"Processing: {relative_path}")
+                
+                # Backup original file
+                self._backup_file(gradle_file)
+                
+                content = gradle_file.read_text(encoding='utf-8')
+                
+                # Check if hamcrest is already present
+                if 'org.hamcrest' in content or 'hamcrest' in content:
+                    # Check if it's an old version that needs upgrading
+                    if 'hamcrest-all' in content and 'hamcrestVersion' in content:
+                        logger.debug(f"  Found old hamcrest-all in {relative_path}, will upgrade")
+                        # Continue to upgrade
+                    elif 'hamcrest:2.2' in content or 'AAA-Issue-Refactor' in content:
+                        logger.debug(f"  Modern Hamcrest already present in {relative_path}")
+                        already_present.append(str(relative_path))
+                        continue
+                    else:
+                        logger.debug(f"  Unknown hamcrest version in {relative_path}, will upgrade")
+                        # Continue to upgrade
+                
+                # Try to add hamcrest
+                modified_content = self._add_to_gradle_dependencies(content)
+                
+                if modified_content != content:
+                    gradle_file.write_text(modified_content, encoding='utf-8')
+                    modified_files.append(str(relative_path))
+                    logger.debug(f"  ✓ Added Hamcrest to {relative_path}")
+                else:
+                    logger.debug(f"  ✗ Could not modify {relative_path} (no dependencies block found)")
+                    failed_files.append(str(relative_path))
+                    
+            except Exception as e:
+                logger.error(f"Failed to process {gradle_file}: {e}")
+                failed_files.append(str(gradle_file.relative_to(self.project_path)))
+        
+        # Create summary message
+        summary_parts = []
+        if modified_files:
+            summary_parts.append(f"Added to {len(modified_files)} modules: {', '.join(modified_files[:3])}" + 
+                                ("..." if len(modified_files) > 3 else ""))
+        if already_present:
+            summary_parts.append(f"Already present in {len(already_present)} modules")
+        if failed_files:
+            summary_parts.append(f"Failed to modify {len(failed_files)} modules")
+        
+        if modified_files or already_present:
+            return True, "; ".join(summary_parts)
+        else:
+            return False, f"Failed to add Hamcrest to any modules: {'; '.join(summary_parts)}"
     
     def _is_hamcrest_present_maven(self, content: str) -> bool:
         """Check if Hamcrest dependency is already present in Maven POM."""
@@ -194,44 +301,36 @@ class DependencyManager:
         
         return '\n'.join(lines)
     
-    def _add_hamcrest_gradle(self) -> Tuple[bool, str]:
-        """Add Hamcrest dependency to Gradle build files."""
-        # Only modify the root build.gradle file
-        root_gradle = self.project_path / "build.gradle"
-        if not root_gradle.exists():
-            # Try build.gradle.kts
-            root_gradle = self.project_path / "build.gradle.kts"
-            if not root_gradle.exists():
-                return False, "Root build.gradle or build.gradle.kts not found"
-        
-        try:
-            # Backup original file
-            self._backup_file(root_gradle)
-            
-            content = root_gradle.read_text(encoding='utf-8')
-            
-            # Check if hamcrest is already present
-            if 'org.hamcrest' in content or 'hamcrest' in content:
-                logger.debug("Hamcrest already present in root build.gradle")
-                return True, "Hamcrest dependency already present"
-            
-            # Find dependencies block and add hamcrest
-            modified_content = self._add_to_gradle_dependencies(content)
-            
-            if modified_content != content:
-                root_gradle.write_text(modified_content, encoding='utf-8')
-                return True, "Added Hamcrest to root build.gradle"
-            else:
-                return False, "Could not find dependencies block in build.gradle"
-                
-        except Exception as e:
-            logger.error(f"Failed to modify {root_gradle}: {e}")
-            return False, f"Error modifying build.gradle: {e}"
-    
     def _add_to_gradle_dependencies(self, content: str) -> str:
         """Add Hamcrest to Gradle dependencies block."""
         lines = content.split('\n')
         
+        # Check if there's already hamcrest-all and upgrade it
+        hamcrest_upgraded = False
+        for i, line in enumerate(lines):
+            if 'hamcrest-all' in line and ('testCompile' in line or 'testImplementation' in line):
+                # Replace old hamcrest-all with modern hamcrest
+                old_line = line
+                # Extract indentation
+                indent_match = re.match(r'^(\s*)', line)
+                indent = indent_match.group(1) if indent_match else "    "
+                
+                # Replace with modern hamcrest version
+                if 'testCompile' in line:
+                    new_line = f'{indent}testImplementation "org.hamcrest:hamcrest:2.2"  // Upgraded from hamcrest-all for AAA-Issue-Refactor'
+                else:
+                    new_line = f'{indent}testImplementation "org.hamcrest:hamcrest:2.2"  // Upgraded from hamcrest-all for AAA-Issue-Refactor'
+                
+                lines[i] = f'    // {old_line.strip()}  // Commented out by AAA-Issue-Refactor'
+                lines.insert(i + 1, new_line)
+                hamcrest_upgraded = True
+                logger.debug(f"Upgraded hamcrest-all to hamcrest:2.2")
+                break
+        
+        if hamcrest_upgraded:
+            return '\n'.join(lines)
+        
+        # If no existing hamcrest found, add new dependency
         # Find dependencies block
         in_dependencies = False
         brace_count = 0

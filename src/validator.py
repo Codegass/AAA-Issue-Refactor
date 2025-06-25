@@ -164,10 +164,17 @@ class CodeValidator:
         start_line = method_line_idx
         for i in range(method_line_idx - 1, -1, -1):
             line = lines[i].strip()
-            # Stop if we hit something that's clearly not an annotation or comment
-            if line and not line.startswith("@") and not line.startswith("/*") and not line.startswith("*"):
+            # If we find an annotation, this is part of the method
+            if line.startswith("@"):
+                start_line = i
+                continue
+            # Skip empty lines and comments within the method scope
+            elif line == "" or line.startswith("//") or line.startswith("/*") or line.startswith("*"):
+                # Don't update start_line for empty lines/comments, but continue looking
+                continue
+            else:
+                # Hit something substantial that's not part of this method
                 break
-            start_line = i
         
         # Find the end of the method using brace counting
         brace_count = 0
@@ -188,6 +195,7 @@ class CodeValidator:
                 end_line = i
                 break
         
+        logger.debug(f"Found method '{method_name}' span: lines {start_line}-{end_line}")
         return start_line, end_line
 
     def _comment_out_method(self, content: str, method_name: str) -> Tuple[str, bool]:

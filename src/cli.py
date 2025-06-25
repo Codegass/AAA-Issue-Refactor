@@ -14,6 +14,7 @@ from typing import List, Tuple, Optional
 import pandas as pd
 import logging
 import csv
+import re
 
 from .discovery import TestDiscovery, TestCase
 from .refactor import TestRefactor, RefactoringResult, TestContext
@@ -190,7 +191,7 @@ def refactoring_phase(test_cases: List[TestCase], java_project_path: Path,
 
 def execution_test_phase(java_project_path: Path, output_path: Path, 
                          debug_mode: bool = False, keep_files: bool = False,
-                         fallback_manual: bool = True) -> None:
+                         fallback_manual: bool = True, skip_initial_build: bool = False) -> None:
     """Phase 3: Execution Testing. Integrates and tests all refactored code."""
     logger.info("\nPhase 3: Execution Testing")
     logger.info("=" * 50)
@@ -275,9 +276,23 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
                 if test_path.exists():
                     modified_files.append(test_path)
 
+            # Check if Hamcrest dependency is needed for this strategy
+            hamcrest_needed = any('hamcrest' in str(row.get(f'{prefix}_refactored_test_case_imports', '')).lower() 
+                                for _, row in strategy_df.iterrows())
+            
+            if hamcrest_needed:
+                logger.info("Detecting Hamcrest usage, ensuring dependency is available...")
+                hamcrest_success, hamcrest_message = validator.ensure_hamcrest_dependency()
+                if hamcrest_success:
+                    logger.info(f"✓ Hamcrest dependency ready: {hamcrest_message}")
+                else:
+                    logger.warning(f"⚠ Hamcrest dependency issue: {hamcrest_message}")
+
             # Always ensure execution readiness with smart build management
             logger.info("Verifying execution readiness...")
-            exec_ready, exec_message = build_manager.ensure_execution_ready(modified_files)
+            exec_ready, exec_message = build_manager.ensure_execution_ready(
+                modified_files, skip_build_check=skip_initial_build
+            )
             
             if not exec_ready:
                 logger.error(f"❌ Execution preparation failed: {exec_message}")
@@ -304,6 +319,28 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
                 # For now, we restore, modify, test, and move to the next.
                 backup_mgr.restore_file(test_path)
                 
+                # Extract method names from refactored code to handle mismatches
+                refactored_method_names = _extract_method_names_from_code(row[code_col])
+                csv_method_name = row['test_method_name']
+                
+                # Determine which method to comment out/delete
+                target_method_for_removal = csv_method_name
+                if refactored_method_names:
+                    # Check if any refactored method conflicts with existing methods
+                    with open(test_path, 'r', encoding='utf-8') as f:
+                        original_content = f.read()
+                    original_method_names = _extract_method_names_from_code(original_content)
+                    
+                    for ref_method in refactored_method_names:
+                        if ref_method in original_method_names and ref_method != csv_method_name:
+                            # Found a conflict - we should remove the conflicting method instead
+                            target_method_for_removal = ref_method
+                            logger.info(f"  📝 Method name mismatch detected:")
+                            logger.info(f"     CSV method: {csv_method_name}")
+                            logger.info(f"     Refactored method: {ref_method}")
+                            logger.info(f"     Will comment out: {target_method_for_removal}")
+                            break
+                
                 # Integrate the code
                 is_one_to_many = row['issue_type'].lower().strip() == "multiple aaa"
                 # Parse additional imports, filtering out empty strings
@@ -313,9 +350,12 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
                 # Convert class path format to proper static import format for JUnit assertions
                 additional_imports = []
                 for imp in raw_imports:
+                    # Skip if already properly formatted as static import
+                    if imp.startswith('static '):
+                        additional_imports.append(imp)
                     # Check if it's a JUnit assertion that should be a static import
-                    if ('org.junit.jupiter.api.Assertions.' in imp and 
-                        any(assertion in imp for assertion in ['assert', 'fail'])):
+                    elif ('org.junit.jupiter.api.Assertions.' in imp and 
+                          any(assertion in imp for assertion in ['assert', 'fail'])):
                         # Convert to static import format
                         additional_imports.append(f"static {imp}")
                     elif ('org.hamcrest.' in imp and 
@@ -326,7 +366,7 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
                         # Keep as regular import
                         additional_imports.append(imp)
                 success, modified_content, _ = validator.integrate_refactored_method(
-                    test_path, row['test_method_name'], row[code_col], strategy,
+                    test_path, target_method_for_removal, row[code_col], strategy,
                     additional_imports, is_one_to_many,
                     debug_mode=debug_mode
                 )
@@ -491,12 +531,23 @@ def _display_execution_summary(summary: dict, project_name: str) -> None:
     logger.info("=" * 60)
 
 
-def _extract_method_names_from_code(code: str) -> List[str]:
-    """Extract all test method names from Java code."""
-    import re
-    # Find all @Test annotated methods
-    pattern = re.compile(r'@Test\s+[^}]*?void\s+([a-zA-Z_]\w*)\s*\(', re.MULTILINE | re.DOTALL)
-    return pattern.findall(code)
+def _extract_method_names_from_code(code_content: str) -> List[str]:
+    """Extract method names from Java code using regex."""
+    if not code_content:
+        return []
+    
+    # Regex to find method declarations in Java
+    # Matches: @Test or public/private/protected + return_type + method_name + (
+    method_pattern = re.compile(
+        r'(?:@Test\s+)?(?:public|private|protected)\s+(?:static\s+)?(?:[\w<>\[\]]+\s+)*(\w+)\s*\(',
+        re.MULTILINE
+    )
+    
+    methods = method_pattern.findall(code_content)
+    # Filter out common non-method matches like constructors or getters
+    filtered_methods = [m for m in methods if not m[0].isupper()]  # Exclude constructors
+    
+    return filtered_methods
 
 def _rename_methods_if_needed(code: str, original_method_name: str, strategy: str, existing_methods: set) -> str:
     """Rename methods in code if they conflict with existing methods."""
@@ -984,7 +1035,7 @@ Examples:
             
         elif args.execution_test_only:
             logger.info("\nMode: Execution Test Only")
-            execution_test_phase(java_path, output_path, args.debug, args.keep_files, not args.no_fallback_manual)
+            execution_test_phase(java_path, output_path, args.debug, args.keep_files, not args.no_fallback_manual, args.skip_initial_build)
             
         elif args.pit_test_only:
             logger.info(f"\nMode: PIT Test Only ({args.rftype.upper()} strategy)")
@@ -1017,7 +1068,7 @@ Examples:
                 refactoring_phase(test_cases, java_path, data_path, output_path, strategy, args.debug)
             
             # Phase 3: Execution Testing
-            execution_test_phase(java_path, output_path, args.debug, args.keep_files, not args.no_fallback_manual)
+            execution_test_phase(java_path, output_path, args.debug, args.keep_files, not args.no_fallback_manual, args.skip_initial_build)
             
             # Phase 4: PIT Testing
             for strategy in strategies_to_run:
