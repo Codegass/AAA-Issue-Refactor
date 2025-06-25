@@ -7,6 +7,7 @@ from typing import Optional, Tuple, List
 import logging
 
 from .build_system import create_build_system, BuildSystem
+from .dependency_manager import DependencyManager
 
 logger = logging.getLogger('aif')
 
@@ -16,6 +17,7 @@ class CodeValidator:
     def __init__(self, java_project_path: Path):
         self.java_project_path = java_project_path
         self.build_system = create_build_system(java_project_path)
+        self.dependency_manager = DependencyManager(java_project_path)
         
         logger.debug(f"Initialized CodeValidator with {self.build_system.get_build_system_name()} build system")
     
@@ -253,3 +255,15 @@ class CodeValidator:
     def clean_project(self) -> Tuple[bool, str]:
         """Clean the project using the appropriate build system."""
         return self.build_system.clean_project()
+    
+    def cleanup_dependency_changes(self):
+        """Clean up any dependency changes made during validation."""
+        try:
+            self.dependency_manager.restore_backups()
+            logger.debug("Successfully cleaned up dependency changes")
+        except Exception as e:
+            logger.warning(f"Failed to cleanup dependency changes: {e}")
+    
+    def ensure_hamcrest_dependency(self) -> Tuple[bool, str]:
+        """Ensure Hamcrest dependency is available for testing."""
+        return self.dependency_manager.add_hamcrest_dependency()
