@@ -7,6 +7,7 @@ of refactored test cases compared to original test cases.
 """
 
 import logging
+import os
 import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -122,8 +123,9 @@ class PITTester:
             # Construct PIT command based on build system
             build_system_name = self.build_system.get_build_system_name().lower()
             if "maven" in build_system_name:
+                mvn = "mvn.cmd" if os.name == "nt" else "mvn"
                 command = [
-                    "mvn", "org.pitest:pitest-maven:mutationCoverage",
+                    mvn, "org.pitest:pitest-maven:mutationCoverage",
                     f"-DtargetClasses={test_class.replace('.', '/')}*",
                     f"-DtargetTests={test_class}.{test_method}",
                     "-DoutputFormats=XML,HTML",

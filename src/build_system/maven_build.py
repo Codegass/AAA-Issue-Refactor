@@ -1,5 +1,6 @@
 """Maven build system implementation."""
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -33,8 +34,9 @@ class MavenBuildSystem(BuildSystem):
         
         # Use 'install' to build all modules and place them in the local Maven repo.
         # This is crucial for multi-module projects to resolve inter-module dependencies.
+        mvn = "mvn.cmd" if os.name == "nt" else "mvn"
         command = [
-            "mvn", "clean", "install", 
+            mvn, "clean", "install", 
             "-DskipTests=true",                   # Don't run tests, just build and install
             "-Drat.skip=true",                    # Skip Apache RAT checks
             "-Dmaven.javadoc.skip=true",          # Skip javadoc generation  
@@ -147,9 +149,10 @@ class MavenBuildSystem(BuildSystem):
                 if debug_logger.isEnabledFor(logging.DEBUG):
                     debug_logger.debug(f"Using Maven module directory for test execution: {working_dir}")
 
+        mvn = "mvn.cmd" if os.name == "nt" else "mvn"
         test_spec = f"{test_class}#{test_method}"
         command = [
-            "mvn", "surefire:test", 
+            mvn, "surefire:test", 
             f"-Dtest={test_spec}", 
             "-DfailIfNoTests=false",
             "-Dmaven.test.failure.ignore=true",
@@ -236,7 +239,8 @@ class MavenBuildSystem(BuildSystem):
     
     def clean_project(self) -> Tuple[bool, str]:
         """Clean the Maven project."""
-        command = ["mvn", "clean", "-q"]
+        mvn = "mvn.cmd" if os.name == "nt" else "mvn"
+        command = [mvn, "clean", "-q"]
         
         try:
             result = subprocess.run(
@@ -303,8 +307,9 @@ class MavenBuildSystem(BuildSystem):
         
         try:
             # Quick dependency check without downloading
+            mvn = "mvn.cmd" if os.name == "nt" else "mvn"
             result = subprocess.run(
-                ["mvn", "dependency:resolve-sources", "-q", "-DsilenceWarnings=true"],
+                [mvn, "dependency:resolve-sources", "-q", "-DsilenceWarnings=true"],
                 cwd=self.project_path,
                 capture_output=True,
                 text=True,
@@ -335,8 +340,9 @@ class MavenBuildSystem(BuildSystem):
         if debug_logger.isEnabledFor(logging.DEBUG):
             debug_logger.debug("Performing quick compile test...")
         
+        mvn = "mvn.cmd" if os.name == "nt" else "mvn"
         command = [
-            "mvn", "test-compile", "-q", 
+            mvn, "test-compile", "-q", 
             "-DskipTests=true", 
             "-Dmaven.test.skip.exec=true",
             "-T", "1C"  # Use parallel compilation
@@ -412,8 +418,9 @@ class MavenBuildSystem(BuildSystem):
                     module_name = module_path.relative_to(self.project_path)
                     module_args = ["-pl", str(module_name)]
                 
+                mvn = "mvn.cmd" if os.name == "nt" else "mvn"
                 command = [
-                    "mvn", "test-compile", "-q",
+                    mvn, "test-compile", "-q",
                     "-DskipTests=true",
                     "-Drat.skip=true",  # Skip Apache RAT license check
                     "-Dcheckstyle.skip=true",  # Skip Checkstyle validation
