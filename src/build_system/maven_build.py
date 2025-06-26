@@ -546,8 +546,13 @@ class MavenBuildSystem(BuildSystem):
             return False
     
     def _check_all_modules_compiled(self) -> bool:
-        """Check if all modules in a multi-module project are compiled."""
+        """Check if sufficient modules in a multi-module project are compiled."""
+        debug_logger = logging.getLogger('aif')
         module_paths = self._get_module_paths()
+        
+        compiled_modules = 0
+        total_modules_with_src = 0
+        failed_modules = []
         
         for module_path in module_paths:
             main_classes = module_path / "target" / "classes"
@@ -560,13 +565,41 @@ class MavenBuildSystem(BuildSystem):
             has_main_src = src_main.exists() and any(src_main.rglob("*.java"))
             has_test_src = src_test.exists() and any(src_test.rglob("*.java"))
             
-            # If module has source files, check for compiled classes
-            if has_main_src and not (main_classes.exists() and any(main_classes.rglob("*.class"))):
-                return False
-            if has_test_src and not (test_classes.exists() and any(test_classes.rglob("*.class"))):
-                return False
+            # Skip modules without source code (like BOM, distribution modules)
+            if not has_main_src and not has_test_src:
+                if debug_logger.isEnabledFor(logging.DEBUG):
+                    debug_logger.debug(f"Skipping module without source code: {module_path.name}")
+                continue
+                
+            total_modules_with_src += 1
+            
+            # Check if this module is compiled
+            main_compiled = not has_main_src or (main_classes.exists() and any(main_classes.rglob("*.class")))
+            test_compiled = not has_test_src or (test_classes.exists() and any(test_classes.rglob("*.class")))
+            
+            if main_compiled and test_compiled:
+                compiled_modules += 1
+                if debug_logger.isEnabledFor(logging.DEBUG):
+                    debug_logger.debug(f"Module compiled: {module_path.name}")
+            else:
+                failed_modules.append(module_path.name)
+                if debug_logger.isEnabledFor(logging.DEBUG):
+                    debug_logger.debug(f"Module not compiled: {module_path.name} (main={main_compiled}, test={test_compiled})")
         
-        return True
+        if total_modules_with_src == 0:
+            return True  # No modules with source code
+            
+        # Use a more flexible threshold: at least 50% of modules compiled OR at least 5 modules compiled
+        success_threshold = max(0.5, min(5, total_modules_with_src) / total_modules_with_src)
+        success_rate = compiled_modules / total_modules_with_src
+        
+        if debug_logger.isEnabledFor(logging.DEBUG):
+            debug_logger.debug(f"Module compilation check: {compiled_modules}/{total_modules_with_src} compiled ({success_rate:.1%})")
+            debug_logger.debug(f"Required threshold: {success_threshold:.1%}")
+            if failed_modules:
+                debug_logger.debug(f"Failed modules: {', '.join(failed_modules)}")
+        
+        return success_rate >= success_threshold
     
     def _get_module_paths(self) -> List[Path]:
         """Get all module paths in a multi-module Maven project."""

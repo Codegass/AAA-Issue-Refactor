@@ -47,7 +47,8 @@ class ResultsRecorder:
             f'{prefix}_refactoring_error',
             f'{prefix}_refactoring_chat_history',
             f'{prefix}_review_fix_issue_or_not',
-            f'{prefix}_review_why_fail'
+            f'{prefix}_review_why_fail',
+            f'{prefix}_review_code_mismatch'
         ]
 
     def get_all_columns(self) -> List[str]:
@@ -210,7 +211,8 @@ class ResultsRecorder:
             f'{prefix}_refactoring_error': refactoring_result.error_message or "",
             f'{prefix}_refactoring_chat_history': chat_history_path,  # Now stores relative path instead of full JSON
             f'{prefix}_review_fix_issue_or_not': "",
-            f'{prefix}_review_why_fail': ""
+            f'{prefix}_review_why_fail': "",
+            f'{prefix}_review_code_mismatch': ""
         })
         
         return record

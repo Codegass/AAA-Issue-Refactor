@@ -14,6 +14,7 @@ from typing import List, Tuple, Optional
 import pandas as pd
 import logging
 import csv
+import re
 
 from .discovery import TestDiscovery, TestCase
 from .refactor import TestRefactor, RefactoringResult, TestContext
@@ -65,7 +66,7 @@ def find_discovery_file(java_project_path: Path, output_path: Path) -> Optional[
 
 
 def discovery_phase(java_project_path: Path, data_folder_path: Path, output_path: Path,
-                   skip_build: bool = False, fallback_manual: bool = True, 
+                   skip_initial_build: bool = False, fallback_manual: bool = True, 
                    build_timeout: int = 600) -> Path:
     """Phase 1: Test Discovery & Validation."""
     logger.info("Phase 1: Test Discovery & Validation")
@@ -77,7 +78,7 @@ def discovery_phase(java_project_path: Path, data_folder_path: Path, output_path
     logger.info(f"Found {len(test_cases)} initial test cases")
 
     logger.info("Validating test cases...")
-    validated_cases = discovery.validate_test_cases(test_cases, skip_build, fallback_manual, build_timeout)
+    validated_cases = discovery.validate_test_cases(test_cases, skip_initial_build, fallback_manual, build_timeout)
     runnable_count = sum(1 for tc in validated_cases if tc.runable == "yes")
     logger.info(f"Runnable test cases: {runnable_count}/{len(validated_cases)}")
 
@@ -122,7 +123,8 @@ def refactoring_phase(test_cases: List[TestCase], java_project_path: Path,
     refactor = TestRefactor(prompts_dir, data_folder_path, rftype, output_path)
     recorder = ResultsRecorder(output_path)
 
-    runnable_cases = [tc for tc in test_cases if tc.runable == "yes"]
+    # runnable_cases = [tc for tc in test_cases if tc.runable == "yes"]
+    runnable_cases = test_cases # for now we want to refactor all test cases
     cases_to_refactor = [tc for tc in runnable_cases if tc.issue_type.lower().strip() != 'good aaa']
     logger.info(f"Processing {len(runnable_cases)} runnable test cases ({len(cases_to_refactor)} need refactoring)...")
 
@@ -189,7 +191,7 @@ def refactoring_phase(test_cases: List[TestCase], java_project_path: Path,
 
 def execution_test_phase(java_project_path: Path, output_path: Path, 
                          debug_mode: bool = False, keep_files: bool = False,
-                         skip_build: bool = False, fallback_manual: bool = True) -> None:
+                         fallback_manual: bool = True, skip_initial_build: bool = False) -> None:
     """Phase 3: Execution Testing. Integrates and tests all refactored code."""
     logger.info("\nPhase 3: Execution Testing")
     logger.info("=" * 50)
@@ -274,24 +276,37 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
                 if test_path.exists():
                     modified_files.append(test_path)
 
-            # Ensure execution readiness with smart build management
-            if not skip_build:
-                logger.info("Verifying execution readiness...")
-                exec_ready, exec_message = build_manager.ensure_execution_ready(modified_files)
+            # Check if Hamcrest dependency is needed for this strategy
+            hamcrest_needed = any('hamcrest' in str(row.get(f'{prefix}_refactored_test_case_imports', '')).lower() 
+                                for _, row in strategy_df.iterrows())
+            
+            if hamcrest_needed:
+                logger.info("Detecting Hamcrest usage, ensuring dependency is available...")
+                hamcrest_success, hamcrest_message = validator.ensure_hamcrest_dependency()
+                if hamcrest_success:
+                    logger.info(f"✓ Hamcrest dependency ready: {hamcrest_message}")
+                else:
+                    logger.warning(f"⚠ Hamcrest dependency issue: {hamcrest_message}")
+
+            # Always ensure execution readiness with smart build management
+            logger.info("Verifying execution readiness...")
+            exec_ready, exec_message = build_manager.ensure_execution_ready(
+                modified_files, skip_build_check=skip_initial_build
+            )
+            
+            if not exec_ready:
+                logger.error(f"❌ Execution preparation failed: {exec_message}")
+                logger.error("Please resolve build issues and try again.")
                 
-                if not exec_ready:
-                    logger.error(f"❌ Execution preparation failed: {exec_message}")
-                    logger.error("Please resolve build issues and try again.")
-                    
-                    # Track compilation failures
-                    if "compilation failed" in exec_message.lower():
-                        failed_modules = [msg.split("module ")[-1].split()[0] for msg in exec_message.split(";") 
-                                        if "compilation failed for module" in msg]
-                        execution_summary['failed_compilation_modules'].update(failed_modules)
-                    
-                    continue
+                # Track compilation failures
+                if "compilation failed" in exec_message.lower():
+                    failed_modules = [msg.split("module ")[-1].split()[0] for msg in exec_message.split(";") 
+                                    if "compilation failed for module" in msg]
+                    execution_summary['failed_compilation_modules'].update(failed_modules)
                 
-                logger.info(f"✓ Execution environment ready: {exec_message}")
+                continue
+            
+            logger.info(f"✓ Execution environment ready: {exec_message}")
 
             for _, row in strategy_df.iterrows():
                 test_path = Path(row['test_path'])
@@ -304,13 +319,54 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
                 # For now, we restore, modify, test, and move to the next.
                 backup_mgr.restore_file(test_path)
                 
+                # Extract method names from refactored code to handle mismatches
+                refactored_method_names = _extract_method_names_from_code(row[code_col])
+                csv_method_name = row['test_method_name']
+                
+                # Determine which method to comment out/delete
+                target_method_for_removal = csv_method_name
+                if refactored_method_names:
+                    # Check if any refactored method conflicts with existing methods
+                    with open(test_path, 'r', encoding='utf-8') as f:
+                        original_content = f.read()
+                    original_method_names = _extract_method_names_from_code(original_content)
+                    
+                    for ref_method in refactored_method_names:
+                        if ref_method in original_method_names and ref_method != csv_method_name:
+                            # Found a conflict - we should remove the conflicting method instead
+                            target_method_for_removal = ref_method
+                            logger.info(f"  📝 Method name mismatch detected:")
+                            logger.info(f"     CSV method: {csv_method_name}")
+                            logger.info(f"     Refactored method: {ref_method}")
+                            logger.info(f"     Will comment out: {target_method_for_removal}")
+                            break
+                
                 # Integrate the code
                 is_one_to_many = row['issue_type'].lower().strip() == "multiple aaa"
                 # Parse additional imports, filtering out empty strings
                 imports_str = row[f'{prefix}_refactored_test_case_imports']
-                additional_imports = [imp.strip() for imp in imports_str.split(',') if imp.strip()] if imports_str else []
+                raw_imports = [imp.strip() for imp in imports_str.split(',') if imp.strip()] if imports_str else []
+                
+                # Convert class path format to proper static import format for JUnit assertions
+                additional_imports = []
+                for imp in raw_imports:
+                    # Skip if already properly formatted as static import
+                    if imp.startswith('static '):
+                        additional_imports.append(imp)
+                    # Check if it's a JUnit assertion that should be a static import
+                    elif ('org.junit.jupiter.api.Assertions.' in imp and 
+                          any(assertion in imp for assertion in ['assert', 'fail'])):
+                        # Convert to static import format
+                        additional_imports.append(f"static {imp}")
+                    elif ('org.hamcrest.' in imp and 
+                          any(matcher in imp for matcher in ['Matchers.', 'MatcherAssert.'])):
+                        # Convert Hamcrest to static import format
+                        additional_imports.append(f"static {imp}")
+                    else:
+                        # Keep as regular import
+                        additional_imports.append(imp)
                 success, modified_content, _ = validator.integrate_refactored_method(
-                    test_path, row['test_method_name'], row[code_col], strategy,
+                    test_path, target_method_for_removal, row[code_col], strategy,
                     additional_imports, is_one_to_many,
                     debug_mode=debug_mode
                 )
@@ -327,10 +383,9 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
 
                 test_path.write_text(modified_content, encoding='utf-8')
                 
-                # If incremental compilation is needed and not skipped, do it here
-                if not skip_build:
-                    compile_success, compile_output = build_manager.build_system.incremental_compile([test_path])
-                    if not compile_success:
+                # Always perform incremental compilation for quality assurance
+                compile_success, compile_output = build_manager.build_system.incremental_compile([test_path])
+                if not compile_success:
                         logger.warning(f"  ✗ Incremental compilation failed for {row['test_method_name']}.")
                         df.loc[df.index == row.name, result_col] = "compilation_failed"
                         execution_summary['test_failures'].append({
@@ -403,6 +458,10 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
             logger.info("Restoring all original files...")
             backup_mgr.restore_all()
         backup_mgr.cleanup()
+        
+        # Clean up any dependency changes made during validation
+        if 'validator' in locals():
+            validator.cleanup_dependency_changes()
 
     # Display execution summary
     _display_execution_summary(execution_summary, project_name)
@@ -472,12 +531,23 @@ def _display_execution_summary(summary: dict, project_name: str) -> None:
     logger.info("=" * 60)
 
 
-def _extract_method_names_from_code(code: str) -> List[str]:
-    """Extract all test method names from Java code."""
-    import re
-    # Find all @Test annotated methods
-    pattern = re.compile(r'@Test\s+[^}]*?void\s+([a-zA-Z_]\w*)\s*\(', re.MULTILINE | re.DOTALL)
-    return pattern.findall(code)
+def _extract_method_names_from_code(code_content: str) -> List[str]:
+    """Extract method names from Java code using regex."""
+    if not code_content:
+        return []
+    
+    # Regex to find method declarations in Java
+    # Matches: @Test or public/private/protected + return_type + method_name + (
+    method_pattern = re.compile(
+        r'(?:@Test\s+)?(?:public|private|protected)\s+(?:static\s+)?(?:[\w<>\[\]]+\s+)*(\w+)\s*\(',
+        re.MULTILINE
+    )
+    
+    methods = method_pattern.findall(code_content)
+    # Filter out common non-method matches like constructors or getters
+    filtered_methods = [m for m in methods if not m[0].isupper()]  # Exclude constructors
+    
+    return filtered_methods
 
 def _rename_methods_if_needed(code: str, original_method_name: str, strategy: str, existing_methods: set) -> str:
     """Rename methods in code if they conflict with existing methods."""
@@ -774,20 +844,20 @@ Examples:
   # Full refactoring pipeline
   aif --project /path/to/java/project --data /path/to/data --output /path/to/output
   
-  # Discovery phase only
-  aif --project /path/to/java/project --data /path/to/data --output /path/to/output --discovery-only
+  # Discovery phase only (skip initial build if already built in IDE)
+  aif --project /path/to/java/project --data /path/to/data --output /path/to/output --discovery-only --skip-initial-build
 
   # Refactor only (auto-discovers discovery file from output folder)
   aif --project /path/to/java/project --data /path/to/data --output /path/to/output --refactor-only --rftype aaa
   
-  # Refactor only with custom input file
-  aif --project /path/to/java/project --data /path/to/data --output /path/to/output --refactor-only --rftype aaa --input-file /path/to/custom.csv
+  # Execution test only (incremental compilation always performed for quality assurance)
+  aif --project /path/to/java/project --output /path/to/output --execution-test-only
   
   # Generate review-friendly code with all strategies integrated
-  aif --project /path/to/java/project --data /path/to/data --output /path/to/output --show-refactored-only
+  aif --project /path/to/java/project --output /path/to/output --show-refactored-only
   
   # Clean up refactored code after review
-  aif --project /path/to/java/project --data /path/to/data --output /path/to/output --clean-refactored-only
+  aif --project /path/to/java/project --output /path/to/output --clean-refactored-only
         """
     )
 
@@ -867,9 +937,9 @@ Examples:
 
     # Build management options
     parser.add_argument(
-        "--skip-build",
+        "--skip-initial-build",
         action="store_true",
-        help="Skip automatic build detection and assume project is already built"
+        help="Skip initial build detection if project is already built (but still perform incremental compilation)"
     )
     parser.add_argument(
         "--no-fallback-manual",
@@ -945,7 +1015,7 @@ Examples:
         discovery_output_file = None
         if args.discovery_only:
             logger.info("\nMode: Discovery Only")
-            discovery_phase(java_path, data_path, output_path, args.skip_build, not args.no_fallback_manual, args.build_timeout)
+            discovery_phase(java_path, data_path, output_path, args.skip_initial_build, not args.no_fallback_manual, args.build_timeout)
             
         elif args.refactor_only:
             logger.info(f"\nMode: Refactor Only ({args.rftype.upper()} strategy)")
@@ -965,7 +1035,7 @@ Examples:
             
         elif args.execution_test_only:
             logger.info("\nMode: Execution Test Only")
-            execution_test_phase(java_path, output_path, args.debug, args.keep_files, args.skip_build, not args.no_fallback_manual)
+            execution_test_phase(java_path, output_path, args.debug, args.keep_files, not args.no_fallback_manual, args.skip_initial_build)
             
         elif args.pit_test_only:
             logger.info(f"\nMode: PIT Test Only ({args.rftype.upper()} strategy)")
@@ -984,7 +1054,7 @@ Examples:
             logger.info("\nMode: Full Pipeline")
             
             # Phase 1: Discovery
-            discovery_output_file = discovery_phase(java_path, data_path, output_path, args.skip_build, not args.no_fallback_manual, args.build_timeout)
+            discovery_output_file = discovery_phase(java_path, data_path, output_path, args.skip_initial_build, not args.no_fallback_manual, args.build_timeout)
             test_cases = load_test_cases_from_csv(discovery_output_file)
             
             # Phase 2: Refactoring (for each specified strategy, or default to 'aaa')
@@ -998,7 +1068,7 @@ Examples:
                 refactoring_phase(test_cases, java_path, data_path, output_path, strategy, args.debug)
             
             # Phase 3: Execution Testing
-            execution_test_phase(java_path, output_path, args.debug, args.keep_files, args.skip_build, not args.no_fallback_manual)
+            execution_test_phase(java_path, output_path, args.debug, args.keep_files, not args.no_fallback_manual, args.skip_initial_build)
             
             # Phase 4: PIT Testing
             for strategy in strategies_to_run:

@@ -60,22 +60,30 @@ class SmartBuildManager:
         # Step 4: Prompt for manual build
         return self._handle_manual_build_fallback(auto_build_output)
     
-    def ensure_execution_ready(self, modified_files: List[Path]) -> Tuple[bool, str]:
+    def ensure_execution_ready(
+        self, 
+        modified_files: List[Path], 
+        skip_build_check: bool = False
+    ) -> Tuple[bool, str]:
         """
         Ensure the project is ready for execution testing with incremental compilation.
         
         Args:
             modified_files: List of files that have been modified and need compilation
+            skip_build_check: Skip basic build status check (useful for execution-only mode)
             
         Returns:
             Tuple of (success, message)
         """
-        # Step 1: Check basic build status
-        if not self.build_system.is_project_built():
-            return False, (
-                "Project is not properly built. Please run discovery phase first or "
-                "manually build the project using your preferred IDE."
-            )
+        # Step 1: Check basic build status (unless skipped)
+        if not skip_build_check:
+            if not self.build_system.is_project_built():
+                return False, (
+                    "Project is not properly built. Please run discovery phase first or "
+                    "manually build the project using your preferred IDE."
+                )
+        else:
+            logger.info("⚠ Skipping build status check as requested (execution-only mode)")
         
         # Step 2: Perform incremental compilation for modified files
         if modified_files:

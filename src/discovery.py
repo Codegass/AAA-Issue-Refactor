@@ -211,7 +211,7 @@ class TestDiscovery:
         except Exception:
             return 1
     
-    def validate_test_cases(self, test_cases: List[TestCase], skip_build: bool = False,
+    def validate_test_cases(self, test_cases: List[TestCase], skip_initial_build: bool = False,
                           fallback_manual: bool = True, build_timeout: int = 600) -> List[TestCase]:
         """Validate test cases by finding files and checking executability using smart build management."""
         from .validator import CodeValidator
@@ -224,7 +224,7 @@ class TestDiscovery:
         
         # Use smart build management
         build_success, build_message = build_manager.ensure_project_built(
-            skip_build=skip_build,
+            skip_build=skip_initial_build,
             fallback_manual=fallback_manual,
             timeout=build_timeout
         )
@@ -259,13 +259,15 @@ class TestDiscovery:
                         test_file  # Pass the test file path for module detection
                     )
                     
-                    # Categorize test results
+                    # Categorize test results with enhanced error detection
                     if test_success:
                         test_case.pass_status = "pass"
                     elif "COMPILATION ERROR" in test_output or "cannot find symbol" in test_output:
                         test_case.pass_status = "compilation_error"
                     elif "BUILD FAILURE" in test_output:
-                        test_case.pass_status = "build_failure" 
+                        test_case.pass_status = "build_failure"
+                    elif self._is_test_setup_error(test_output):
+                        test_case.pass_status = "test_setup_error"
                     else:
                         test_case.pass_status = "fail"
             else:
@@ -313,6 +315,33 @@ class TestDiscovery:
             logger.info(f"Runnable test cases: {runnable_cases}/{len(validated_cases)}")
         
         return sorted(validated_cases, key=lambda tc: test_cases.index(tc))
+    
+    def _is_test_setup_error(self, test_output: str) -> bool:
+        """
+        Check if the test failure is due to test setup/configuration issues.
+        
+        Args:
+            test_output: The test execution output
+            
+        Returns:
+            True if the error appears to be test setup related
+        """
+        setup_error_indicators = [
+            "NullPointerException",
+            "getProviderConfig()",
+            "getReadFolder()",
+            "getFileSystem()",
+            "AbstractProviderTestCase",
+            "Test setup",
+            "test configuration",
+            "provider config",
+            "Cannot invoke",
+            "because the return value",
+            "is null"
+        ]
+        
+        output_lower = test_output.lower()
+        return any(indicator.lower() in output_lower for indicator in setup_error_indicators)
     
     def save_refactor_cases_csv(self, test_cases: List[TestCase], output_path: Path) -> Path:
         """Save validated test cases to refactor cases CSV."""
