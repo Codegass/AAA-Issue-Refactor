@@ -559,7 +559,7 @@ class MavenBuildSystem(BuildSystem):
             has_test_src = src_test.exists() and any(src_test.rglob("*.java"))
             
             # Skip modules without source code (like BOM, distribution modules)
-            if not has_main_src and not has_test_src:
+            if not has_main_src or not has_test_src:
                 if debug_logger.isEnabledFor(logging.DEBUG):
                     debug_logger.debug(f"Skipping module without source code: {module_path.name}")
                 continue
