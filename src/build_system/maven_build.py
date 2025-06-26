@@ -596,11 +596,15 @@ class MavenBuildSystem(BuildSystem):
     
     def _get_module_paths(self) -> List[Path]:
         """Get all module paths in a multi-module Maven project."""
-        module_paths = [self.project_path]  # Include root module
-        
-        pom_file = self.project_path / "pom.xml"
+        return self._get_submodule_paths(self.project_path)  # Include root module
+    
+    def _get_submodule_paths(self, path: Path) -> List[Path]:
+        """Get all Maven module paths within a given directory."""        
+        pom_file = path / "pom.xml"
         if not pom_file.exists():
-            return module_paths
+            return []
+        
+        module_paths = [path]
         
         try:
             content = pom_file.read_text(encoding='utf-8')
@@ -610,9 +614,9 @@ class MavenBuildSystem(BuildSystem):
             modules = re.findall(module_pattern, content)
             
             for module in modules:
-                module_path = self.project_path / module.strip()
-                if module_path.exists() and (module_path / "pom.xml").exists():
-                    module_paths.append(module_path)
+                module_path = path / module.strip()
+                if module_path.exists():
+                    module_paths.extend(self._get_submodule_paths(module_path))
         except Exception:
             pass
         
