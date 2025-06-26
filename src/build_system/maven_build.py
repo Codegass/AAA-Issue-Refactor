@@ -308,10 +308,23 @@ class MavenBuildSystem(BuildSystem):
                 cwd=self.project_path,
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout=120
             )
             
             success = result.returncode == 0
+            
+            # If 'resolve-sources' fails, try its older alias, 'sources'
+            if not success:
+                result = subprocess.run(
+                    ["mvn", "dependency:sources", "-q", "-DsilenceWarnings=true"],
+                    cwd=self.project_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=120
+                )
+                
+                success = result.returncode == 0
+            
             if debug_logger.isEnabledFor(logging.DEBUG):
                 debug_logger.debug(f"Dependency resolution check: {success}")
                 if not success:
