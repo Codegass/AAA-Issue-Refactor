@@ -265,9 +265,8 @@ class DependencyManager:
         for i, line in enumerate(lines):
             stripped = line.strip()
             
-            # Look for end of properties or start of build/plugins
-            if (stripped == '</properties>' or 
-                stripped in ['<build>', '<build >', '<profiles>', '<profiles >']):
+            # Look for end of properties
+            if stripped == '</properties>':
                 insertion_point = i + 1
                 # Extract base indentation
                 match = re.match(r'^(\s*)', line)
