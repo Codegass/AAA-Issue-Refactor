@@ -209,6 +209,7 @@ class DependencyManager:
         lines = content.split('\n')
         
         # Find the dependencies section
+        in_plugin = False
         in_dependencies = False
         dependencies_start = -1
         dependencies_end = -1
@@ -217,8 +218,12 @@ class DependencyManager:
         for i, line in enumerate(lines):
             stripped = line.strip()
             
+            # Find start of plugin section
+            if stripped == '<plugin>' or stripped.startswith('<plugin '):
+                in_plugin = True
+            
             # Find start of dependencies section
-            if stripped == '<dependencies>' or stripped.startswith('<dependencies '):
+            if not in_plugin and (stripped == '<dependencies>' or stripped.startswith('<dependencies ')):
                 in_dependencies = True
                 dependencies_start = i
                 # Extract indentation from the dependencies tag
@@ -227,6 +232,10 @@ class DependencyManager:
                     base_indent = match.group(1)
                     indent = base_indent + "    "  # Add one level of indentation
                 continue
+            
+            # Find end of plugin section
+            if in_plugin and stripped == '</plugin>':
+                in_plugin = False
             
             # Find end of dependencies section
             if in_dependencies and stripped == '</dependencies>':
