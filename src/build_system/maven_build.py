@@ -308,10 +308,23 @@ class MavenBuildSystem(BuildSystem):
                 cwd=self.project_path,
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout=120
             )
             
             success = result.returncode == 0
+            
+            # If 'resolve-sources' fails, try its older alias, 'sources'
+            if not success:
+                result = subprocess.run(
+                    ["mvn", "dependency:sources", "-q", "-DsilenceWarnings=true"],
+                    cwd=self.project_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=120
+                )
+                
+                success = result.returncode == 0
+            
             if debug_logger.isEnabledFor(logging.DEBUG):
                 debug_logger.debug(f"Dependency resolution check: {success}")
                 if not success:
@@ -559,7 +572,7 @@ class MavenBuildSystem(BuildSystem):
             has_test_src = src_test.exists() and any(src_test.rglob("*.java"))
             
             # Skip modules without source code (like BOM, distribution modules)
-            if not has_main_src and not has_test_src:
+            if not has_main_src or not has_test_src:
                 if debug_logger.isEnabledFor(logging.DEBUG):
                     debug_logger.debug(f"Skipping module without source code: {module_path.name}")
                 continue
@@ -596,11 +609,15 @@ class MavenBuildSystem(BuildSystem):
     
     def _get_module_paths(self) -> List[Path]:
         """Get all module paths in a multi-module Maven project."""
-        module_paths = [self.project_path]  # Include root module
-        
-        pom_file = self.project_path / "pom.xml"
+        return self._get_submodule_paths(self.project_path)  # Include root module
+    
+    def _get_submodule_paths(self, path: Path) -> List[Path]:
+        """Get all Maven module paths within a given directory."""        
+        pom_file = path / "pom.xml"
         if not pom_file.exists():
-            return module_paths
+            return []
+        
+        module_paths = [path]
         
         try:
             content = pom_file.read_text(encoding='utf-8')
@@ -610,9 +627,9 @@ class MavenBuildSystem(BuildSystem):
             modules = re.findall(module_pattern, content)
             
             for module in modules:
-                module_path = self.project_path / module.strip()
-                if module_path.exists() and (module_path / "pom.xml").exists():
-                    module_paths.append(module_path)
+                module_path = path / module.strip()
+                if module_path.exists():
+                    module_paths.extend(self._get_submodule_paths(module_path))
         except Exception:
             pass
         
