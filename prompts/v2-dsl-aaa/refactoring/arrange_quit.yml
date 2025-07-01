@@ -1,0 +1,53 @@
+SmellType: "Arrange & Quit"
+Description: "The test includes a conditional return statement in the Arrange block, which prematurely exits the test. This makes the test's behavior dependent on environmental state and can hide failures. It should be replaced with an 'assume' statement."
+Variables:
+  ConditionalReturnBlock: "The if-statement block that causes the test to exit early."
+  Condition: "The boolean condition inside the if-statement."
+Steps:
+  - Description: "Identify any conditional block in the Arrange section that contains a 'return' statement."
+    Action: "IdentifyBlock"
+    Parameters:
+      SourcePattern: "Find an 'if (...) { return; }' or 'if (...) return;' statement before the main 'Act' part of the test."
+
+  - Description: "Replace the conditional return block with a JUnit 'Assume.assumeTrue(...)' call. This properly signals to the test runner that the test should be skipped, not silently passed."
+    Action: "ReplaceBlock"
+    Parameters:
+      TargetPattern: "{ConditionalReturnBlock}"
+      ReplacementPattern: "Assume.assumeTrue({Condition});"
+
+  - Description: "Add the required import for the Assume API if it's not already present."
+    Action: "AddImport"
+    Parameters:
+      Import: "org.junit.Assume"
+
+Example:
+  Before: |
+    @Test
+    public void testRemoteService() {
+        // Arrange
+        RemoteSystem system = getRemoteSystem();
+        if (!system.isAvailable()) {
+            return; // This is the issue
+        }
+
+        // Act
+        Result result = system.performOperation();
+
+        // Assert
+        assertTrue(result.isSuccess());
+    }
+  After: |
+    import org.junit.Assume;
+
+    @Test
+    public void testRemoteService() {
+        // Arrange
+        RemoteSystem system = getRemoteSystem();
+        Assume.assumeTrue("Remote system must be available for this test", system.isAvailable());
+
+        // Act
+        Result result = system.performOperation();
+
+        // Assert
+        assertTrue(result.isSuccess());
+    } 

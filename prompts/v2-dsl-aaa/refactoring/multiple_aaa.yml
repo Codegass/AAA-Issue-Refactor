@@ -1,0 +1,64 @@
+SmellType: "Multiple AAA"
+Description: "A test method contains multiple Arrange-Act-Assert sequences, violating the Single Responsibility Principle for tests. It should be split into multiple, separate test methods."
+Variables:
+  OriginalMethodName: "The name of the original test method."
+  ScenarioName: "A descriptive name for each independent scenario identified within the original method (e.g., 'WithNullInput', 'OnSuccess')."
+Steps:
+  - Description: "Identify each distinct Arrange-Act-Assert block in the original method."
+    Action: "IdentifyBlocks"
+    Parameters:
+      SourcePattern: "Look for repeating patterns of variable initialization (Arrange), object/method invocations (Act), and assertion calls (Assert). Each pattern is a self-contained logical unit."
+  
+  - Description: "For each identified AAA block, create a new, independent method annotated with @Test."
+    Action: "SplitMethod"
+    Parameters:
+      TargetMethod: "{OriginalMethodName}"
+      ExtractedMethodNamePattern: "test{OriginalMethodName}_{ScenarioName}"
+  
+  - Description: "Delete the original test method, as it has been fully replaced by the new, more specific test methods."
+    Action: "DeleteMethod"
+    Parameters:
+      TargetMethod: "{OriginalMethodName}"
+
+Example:
+  Before: |
+    @Test
+    public void testServerInteractions() {
+        // Arrange 1
+        Server server = new Server();
+        server.connect();
+        // Act 1
+        boolean isConnected = server.isConnected();
+        // Assert 1
+        assertTrue(isConnected);
+
+        // Arrange 2
+        String data = "hello";
+        // Act 2
+        boolean dataSent = server.send(data);
+        // Assert 2
+        assertTrue(dataSent);
+    }
+  After: |
+    @Test
+    public void testServerIsConnected() {
+        // Arrange
+        Server server = new Server();
+        server.connect();
+        // Act
+        boolean isConnected = server.isConnected();
+        // Assert
+        assertTrue(isConnected);
+    }
+
+    @Test
+    public void testSendDataSuccessfully() {
+        // Arrange
+        Server server = new Server();
+        server.connect();
+        String data = "hello";
+        // Act
+        boolean dataSent = server.send(data);
+        // Assert
+        assertTrue(dataSent);
+    } 

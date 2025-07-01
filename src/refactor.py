@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 import logging
+import yaml
 
 from .llm_client import LLMClient
 from .discovery import TestCase
@@ -87,6 +88,9 @@ class PromptManager:
         
         if len(prompts) == 1:
             # Single issue, return the prompt directly without numbering
+            # For DSL, the header is already part of the formatted YAML, so we don't split
+            if "v2-dsl-aaa" in str(self.prompts_dir):
+                return prompts[0]
             return prompts[0].split('\n', 1)[1]  # Remove the "Issue Type 1:" header
         else:
             # Multiple issues, combine them
@@ -96,7 +100,7 @@ class PromptManager:
             return combined_prompt
     
     def _load_single_issue_prompt(self, issue_type: str) -> str:
-        """Load prompt for a single issue type."""
+        """Load prompt for a single issue type from .md or .yml file."""
         # Convert issue type to filename format with special mappings
         filename_mappings = {
             "assert pre-condition": "assert_precondition",
@@ -109,13 +113,30 @@ class PromptManager:
         }
         
         normalized_issue = issue_type.lower()
-        filename = filename_mappings.get(normalized_issue, normalized_issue.replace(" ", "_").replace("-", "_"))
-        filename += ".md"
+        base_filename = filename_mappings.get(normalized_issue, normalized_issue.replace(" ", "_").replace("-", "_"))
         
-        path = self.prompts_dir / "refactoring" / filename
-        if not path.exists():
-            raise FileNotFoundError(f"Refactoring prompt not found: {path}")
-        return path.read_text(encoding='utf-8')
+        # Determine file type based on strategy path
+        if "v2-dsl-aaa" in str(self.prompts_dir):
+            filename = base_filename + ".yml"
+            path = self.prompts_dir / "refactoring" / filename
+            if not path.exists():
+                raise FileNotFoundError(f"Refactoring rule file not found: {path}")
+            
+            with open(path, 'r', encoding='utf-8') as f:
+                rule_content = yaml.safe_load(f)
+            
+            # Format the YAML rule into a structured prompt for the LLM
+            formatted_prompt = "Please refactor the test case by strictly following this YAML rule:\n\n"
+            formatted_prompt += "```yaml\n"
+            formatted_prompt += yaml.dump(rule_content, allow_unicode=True, sort_keys=False, indent=2)
+            formatted_prompt += "```"
+            return formatted_prompt
+        else:
+            filename = base_filename + ".md"
+            path = self.prompts_dir / "refactoring" / filename
+            if not path.exists():
+                raise FileNotFoundError(f"Refactoring prompt not found: {path}")
+            return path.read_text(encoding='utf-8')
     
     def _analyze_frameworks(self, imports: List[str], source_code: str) -> str:
         """Analyzes import statements to identify testing and mocking frameworks."""

@@ -1,0 +1,54 @@
+SmellType: "Suppressed Exception"
+Description: "The test uses a try-catch block to swallow an expected exception, often followed by assertions outside the catch block. This hides the actual test's intent. The correct approach is to explicitly assert that an exception is thrown."
+Variables:
+  TryCatchBlock: "The try-catch block that suppresses the exception."
+  ActionThatThrows: "The specific line of code inside the try block that is expected to throw an exception."
+  ExpectedException: "The class name of the exception that is expected to be thrown (e.g., 'IllegalArgumentException.class')."
+Steps:
+  - Description: "Identify the try-catch block where an exception is caught and ignored or handled improperly."
+    Action: "IdentifyBlock"
+    Parameters:
+      SourcePattern: "Find a 'try { ... } catch (Exception e) { /* empty or logging */ }' structure."
+
+  - Description: "Replace the entire try-catch block with a call to 'assertThrows' or a similar API (like TestNG's @Test(expected=...))."
+    Action: "ReplaceBlock"
+    Parameters:
+      TargetPattern: "{TryCatchBlock}"
+      ReplacementPattern: "assertThrows({ExpectedException}, () -> { {ActionThatThrows} });"
+
+  - Description: "Add the required import for the 'assertThrows' method if it is not already present."
+    Action: "AddImport"
+    Parameters:
+      Import: "org.junit.jupiter.api.Assertions.assertThrows"
+
+Example:
+  Before: |
+    @Test
+    public void testSetInvalidPort() {
+        // Arrange
+        ServerConfig config = new ServerConfig();
+        
+        // Act
+        try {
+            config.setPort(-1);
+        } catch (IllegalArgumentException e) {
+            // Exception is swallowed, which is the issue
+        }
+        
+        // Assert
+        assertEquals(8080, config.getPort()); // This assertion is misleading
+    }
+  After: |
+    import static org.junit.jupiter.api.Assertions.assertThrows;
+    import org.junit.jupiter.api.Test;
+
+    @Test
+    public void testSetInvalidPort() {
+        // Arrange
+        ServerConfig config = new ServerConfig();
+        
+        // Act & Assert
+        assertThrows(IllegalArgumentException.class, () -> {
+            config.setPort(-1);
+        });
+    } 

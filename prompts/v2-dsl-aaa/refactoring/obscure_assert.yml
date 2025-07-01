@@ -1,0 +1,65 @@
+SmellType: "Obscure Assert"
+Description: "The Assert block contains complex logic (e.g., loops, conditionals, or multiple statements), which makes the test's intent difficult to understand. It should be refactored into a clear, declarative assertion using a library like Hamcrest."
+Variables:
+  OriginalAssertBlock: "The original, complex block of code in the Assert section."
+  ActualValue: "The actual object or collection being verified in the assertion."
+  HamcrestMatcher: "A descriptive Hamcrest matcher that encapsulates the complex logic."
+Steps:
+  - Description: "Identify the complex assertion logic block at the end of the method."
+    Action: "IdentifyBlock"
+    Parameters:
+      SourcePattern: "Look for a block containing loops (for, while), conditionals (if), or multiple assertions against the same object."
+
+  - Description: "Replace the entire complex assertion block with a single, expressive 'assertThat' call using an appropriate Hamcrest matcher."
+    Action: "ReplaceBlock"
+    Parameters:
+      TargetPattern: "{OriginalAssertBlock}"
+      ReplacementPattern: "assertThat({ActualValue}, is({HamcrestMatcher}));"
+
+  - Description: "Add the static import for Hamcrest's 'assertThat' method."
+    Action: "AddImport"
+    Parameters:
+      Import: "static org.hamcrest.MatcherAssert.assertThat"
+
+  - Description: "Add a static wildcard import for Hamcrest's core matchers."
+    Action: "AddImport"
+    Parameters:
+      Import: "static org.hamcrest.Matchers.*"
+
+Example:
+  Before: |
+    @Test
+    public void testFindAdminUser() {
+        // Arrange
+        List<User> users = repository.findAll();
+        
+        // Act
+        User admin = null;
+        for (User user : users) {
+            if (user.isAdmin()) {
+                admin = user;
+                break;
+            }
+        }
+
+        // Assert
+        assertNotNull(admin);
+        assertEquals("Alice", admin.getName());
+    }
+  After: |
+    import static org.hamcrest.MatcherAssert.assertThat;
+    import static org.hamcrest.Matchers.*;
+
+    @Test
+    public void testFindAdminUser() {
+        // Arrange
+        List<User> users = repository.findAll();
+        
+        // Act & Assert
+        assertThat(users, hasItem(
+            allOf(
+                hasProperty("name", equalTo("Alice")),
+                hasProperty("admin", is(true))
+            )
+        ));
+    } 

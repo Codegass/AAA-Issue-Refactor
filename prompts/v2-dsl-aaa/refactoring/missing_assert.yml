@@ -1,0 +1,43 @@
+SmellType: "Missing Assert"
+Description: "A test method performs an action (the Act) but lacks any assertions to verify the outcome. A test without assertions is not a real test, as it cannot fail."
+Variables:
+  TargetMethodName: "The name of the method being tested (the 'Act' part)."
+  ReturnValue: "The object or value returned by the target method."
+  StateChangingObject: "The object whose state is modified by the 'Act'."
+Steps:
+  - Description: "Identify the primary 'Act' of the test, which is the method call that changes state or produces a result."
+    Action: "IdentifyAction"
+    Parameters:
+      SourcePattern: "Find the main method invocation that is not part of the setup."
+  
+  - Description: "Add one or more assertions to verify the outcome of the 'Act'. This could be checking a return value, or verifying the new state of an object."
+    Action: "AddAssertion"
+    Parameters:
+      TargetMethod: "The original test method."
+      AssertionPattern: "Based on the action, add a standard assertion. For example: assertEquals(expected, {ReturnValue}); or assertTrue({StateChangingObject}.isSomething());"
+
+Example:
+  Before: |
+    @Test
+    public void testAddItemToCart() {
+        // Arrange
+        Cart cart = new Cart();
+        Item item = new Item("apple", 1.00);
+        
+        // Act
+        cart.addItem(item);
+    }
+  After: |
+    @Test
+    public void testAddItemToCart() {
+        // Arrange
+        Cart cart = new Cart();
+        Item item = new Item("apple", 1.00);
+        
+        // Act
+        cart.addItem(item);
+        
+        // Assert
+        assertEquals(1, cart.size());
+        assertTrue(cart.contains(item));
+    } 

@@ -1,0 +1,50 @@
+SmellType: "Assert Pre-condition"
+Description: "The test contains an assertion in the Arrange block, before the Act block. These assertions check the state of the test environment rather than the outcome of the test itself. They should be replaced with an 'assume' statement."
+Variables:
+  PreconditionAssertBlock: "The block of one or more assertions in the Arrange section."
+Steps:
+  - Description: "Identify any assertion statements that exist before the main 'Act' of the test method."
+    Action: "IdentifyBlock"
+    Parameters:
+      SourcePattern: "Find calls to 'assertEquals', 'assertTrue', etc., that appear before the primary method invocation being tested."
+
+  - Description: "Replace the precondition assertion block with a JUnit 'Assume.assume...' call. This ensures the test is skipped if the precondition is not met, rather than failing."
+    Action: "ReplaceBlock"
+    Parameters:
+      TargetPattern: "{PreconditionAssertBlock}"
+      ReplacementPattern: "Assume.assumeTrue(condition); // Or Assume.assumeNotNull(...), etc."
+
+  - Description: "Add the required import for the Assume API if it's not already present."
+    Action: "AddImport"
+    Parameters:
+      Import: "org.junit.Assume"
+
+Example:
+  Before: |
+    @Test
+    public void testDataProcessing() {
+        // Arrange
+        Service service = new Service();
+        assertTrue("Service should be connected before test", service.isConnected());
+
+        // Act
+        Result result = service.processData();
+
+        // Assert
+        assertNotNull(result);
+    }
+  After: |
+    import org.junit.Assume;
+
+    @Test
+    public void testDataProcessing() {
+        // Arrange
+        Service service = new Service();
+        Assume.assumeTrue("Service should be connected before test", service.isConnected());
+
+        // Act
+        Result result = service.processData();
+
+        // Assert
+        assertNotNull(result);
+    } 

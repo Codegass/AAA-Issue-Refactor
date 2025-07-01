@@ -1,0 +1,70 @@
+SmellType: "Multiple Acts"
+Description: "The test method contains multiple distinct actions (Act blocks), making it unclear which behavior is actually being tested. Each test should focus on verifying a single action or behavior."
+Variables:
+  OriginalMethodName: "The name of the original test method."
+  PrimaryAction: "The main, most important action being tested."
+  SecondaryAction: "Additional actions that should be in a separate test."
+  ScenarioName: "A descriptive name for the scenario each action represents."
+Steps:
+  - Description: "Identify the multiple, distinct 'Act' calls within the test method. These are method invocations that change the state of the system under test."
+    Action: "IdentifyBlocks"
+    Parameters:
+      SourcePattern: "Look for multiple, unrelated method calls on the primary object being tested between the Arrange and Assert blocks."
+
+  - Description: "Split the original test into multiple new tests, where each new test focuses on a single 'Act'."
+    Action: "SplitMethod"
+    Parameters:
+      TargetMethod: "{OriginalMethodName}"
+      ExtractedMethodNamePattern: "test{ScenarioName}"
+      GroupBy: "Each distinct action."
+  
+  - Description: "Delete the original, unfocused test method."
+    Action: "DeleteMethod"
+    Parameters:
+      TargetMethod: "{OriginalMethodName}"
+
+Example:
+  Before: |
+    @Test
+    public void testUserLifecycle() {
+        // Arrange
+        User user = new User("Bob");
+        UserService service = new UserService();
+        
+        // Act 1
+        service.register(user);
+        // Act 2
+        service.activate(user);
+        
+        // Assert
+        assertTrue(service.isRegistered(user));
+        assertTrue(service.isActive(user));
+    }
+  After: |
+    @Test
+    public void testUserRegistration() {
+        // Arrange
+        User user = new User("Bob");
+        UserService service = new UserService();
+        
+        // Act
+        service.register(user);
+        
+        // Assert
+        assertTrue(service.isRegistered(user));
+        assertFalse(service.isActive(user)); // An activated user would be a different test
+    }
+    
+    @Test
+    public void testUserActivation() {
+        // Arrange
+        User user = new User("Bob");
+        UserService service = new UserService();
+        service.register(user); // Activation requires prior registration
+
+        // Act
+        service.activate(user);
+        
+        // Assert
+        assertTrue(service.isActive(user));
+    } 
