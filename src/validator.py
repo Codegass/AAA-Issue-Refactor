@@ -53,6 +53,7 @@ class CodeValidator:
             - str: The updated content of the file.
             - List[int]: A list of line numbers where code was inserted.
         """
+        original_content = ""  # Initialize to avoid UnboundLocalError
         try:
             original_content = test_file_path.read_text(encoding='utf-8')
             modified_content = original_content

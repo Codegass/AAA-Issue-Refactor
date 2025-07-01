@@ -315,6 +315,17 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
                 logger.info(f"Testing {test_full_name}...")
                 execution_summary['total_tests_run'] += 1
                 
+                # Skip tests with invalid file paths
+                if not test_path.exists() or str(test_path) == "not found":
+                    logger.warning(f"  ✗ Test file not found: {test_path}")
+                    df.loc[df.index == row.name, result_col] = "file_not_found"
+                    execution_summary['test_failures'].append({
+                        'strategy': strategy,
+                        'test': test_full_name,
+                        'reason': 'Test file not found'
+                    })
+                    continue
+                
                 # We need to re-integrate code for each test, as previous integrations are reverted
                 # This is inefficient but safe. A better way would be to group by file.
                 # For now, we restore, modify, test, and move to the next.

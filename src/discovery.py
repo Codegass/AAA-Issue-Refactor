@@ -63,10 +63,28 @@ class TestDiscovery:
         Returns:
             Path to the correct test file, or None if not found
         """
-        # Convert fully qualified class name to file path
+        # Handle nested classes by finding the top-level class
+        # For nested classes like "org.apache.commons.lang3.ValidateTest.InclusiveBetween.WithLong.WithMessage"
+        # we need to find "ValidateTest.java", not "WithMessage.java"
         class_path_parts = test_class_name.split('.')
-        class_file_name = class_path_parts[-1] + '.java'
-        full_class_path = '/'.join(class_path_parts) + '.java'
+        
+        # Find the actual Java file by looking for the first part that could be a class name
+        # (starts with uppercase letter, indicating a class rather than a package)
+        top_level_class_idx = -1
+        for i, part in enumerate(class_path_parts):
+            if part and part[0].isupper():
+                top_level_class_idx = i
+                break
+        
+        if top_level_class_idx == -1:
+            # Fallback to old behavior if no class found
+            class_file_name = class_path_parts[-1] + '.java'
+            full_class_path = '/'.join(class_path_parts) + '.java'
+        else:
+            # Use the top-level class for the file name
+            class_file_name = class_path_parts[top_level_class_idx] + '.java'
+            # Build the path up to the top-level class
+            full_class_path = '/'.join(class_path_parts[:top_level_class_idx + 1]) + '.java'
         
         logger.debug(f"Searching for test file: {test_class_name}")
         if method_name:
