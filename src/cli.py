@@ -123,18 +123,19 @@ def refactoring_phase(test_cases: List[TestCase], java_project_path: Path,
     refactor = TestRefactor(prompts_dir, data_folder_path, rftype, output_path)
     recorder = ResultsRecorder(output_path)
 
-    # runnable_cases = [tc for tc in test_cases if tc.runable == "yes"]
-    runnable_cases = test_cases # for now we want to refactor all test cases
-    cases_to_refactor = [tc for tc in runnable_cases if tc.issue_type.lower().strip() != 'good aaa']
-    logger.info(f"Processing {len(runnable_cases)} runnable test cases ({len(cases_to_refactor)} need refactoring)...")
+    # Process ALL test cases regardless of their runnable/pass status from Phase 1
+    # Phase 2 focuses purely on code quality improvement, not execution feasibility
+    all_cases = test_cases
+    cases_to_refactor = [tc for tc in all_cases if tc.issue_type.lower().strip() != 'good aaa']
+    logger.info(f"Processing {len(all_cases)} test cases ({len(cases_to_refactor)} need refactoring)...")
 
     results = []
     project_name = ""
-    if runnable_cases:
-        project_name = runnable_cases[0].project_name
+    if all_cases:
+        project_name = all_cases[0].project_name
 
-        for i, test_case in enumerate(runnable_cases, 1):
-            logger.info(f"\n[{i}/{len(runnable_cases)}] Processing: {test_case.test_class_name}.{test_case.test_method_name}")
+        for i, test_case in enumerate(all_cases, 1):
+            logger.info(f"\n[{i}/{len(all_cases)}] Processing: {test_case.test_class_name}.{test_case.test_method_name}")
             logger.info(f"Issue Type: {test_case.issue_type}")
 
             original_code = ""
