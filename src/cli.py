@@ -462,7 +462,7 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
                 # Discover test methods to run from the result CSV
                 method_names_col = f'{prefix}_refactored_method_names'
                 if method_names_col in row and row[method_names_col]:
-                    refactored_methods = row[method_names_col].split(',')
+                    refactored_methods = [method.strip() for method in row[method_names_col].split(',') if method.strip()]
                 else:
                     refactored_methods = []
 
@@ -476,31 +476,76 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
                     })
                     continue
 
-                logger.info(f"  Running refactored test(s): {', '.join(refactored_methods)}")
-                all_passed = True
+                # Verify that the refactored methods actually exist in the integrated code
+                current_file_content = test_path.read_text(encoding='utf-8')
+                existing_methods_in_file = _extract_method_names_from_code(current_file_content)
+                
+                # Check which methods actually exist
+                found_methods = []
+                missing_methods = []
                 for method in refactored_methods:
-                    passed, output = validator.run_specific_test(row['test_class_name'], method, test_path)
-                    if not passed:
-                        all_passed = False
-                        logger.warning(f"  - Method '{method}' FAILED.")
-                        if debug_mode: logger.debug(f"Test output:\n{output}")
-                        break
-                
-                test_result = "pass" if all_passed else "fail"
-                logger.info(f"  ✓ Test result: {test_result.upper()}")
-                df.loc[df.index == row.name, result_col] = test_result
-                
-                if all_passed:
-                    execution_summary['successful_tests'].append({
-                        'strategy': strategy,
-                        'test': test_full_name,
-                        'methods': refactored_methods
-                    })
-                else:
+                    if method in existing_methods_in_file:
+                        found_methods.append(method)
+                    else:
+                        missing_methods.append(method)
+                        
+                if missing_methods:
+                    logger.warning(f"  ⚠ Methods not found in integrated file: {', '.join(missing_methods)}")
+                    
+                if not found_methods:
+                    logger.error(f"  ✗ None of the refactored methods exist in the integrated file.")
+                    logger.error(f"    Expected: {', '.join(refactored_methods)}")
+                    logger.error(f"    Found methods: {', '.join(existing_methods_in_file)}")
+                    df.loc[df.index == row.name, result_col] = "method_not_found"
                     execution_summary['test_failures'].append({
                         'strategy': strategy,
                         'test': test_full_name,
-                        'reason': f'Test execution failed: {", ".join(refactored_methods)}'
+                        'reason': f'Refactored methods not found in file: {", ".join(missing_methods)}'
+                    })
+                    continue
+
+                logger.info(f"  Running refactored test(s): {', '.join(found_methods)}")
+                if missing_methods:
+                    logger.info(f"  Skipping missing methods: {', '.join(missing_methods)}")
+                    
+                all_passed = True
+                failed_methods = []
+                for method in found_methods:
+                    passed, output = validator.run_specific_test(row['test_class_name'], method, test_path)
+                    if not passed:
+                        all_passed = False
+                        failed_methods.append(method)
+                        logger.warning(f"  - Method '{method}' FAILED.")
+                        if debug_mode: logger.debug(f"Test output:\n{output}")
+                        # Continue to test other methods even if one fails
+                
+                test_result = "pass" if all_passed else "fail"
+                result_detail = test_result
+                if missing_methods:
+                    result_detail += f" (missing: {len(missing_methods)})"
+                if failed_methods:
+                    result_detail += f" (failed: {', '.join(failed_methods)})"
+                    
+                logger.info(f"  ✓ Test result: {result_detail.upper()}")
+                df.loc[df.index == row.name, result_col] = test_result
+                
+                if all_passed and not missing_methods:
+                    execution_summary['successful_tests'].append({
+                        'strategy': strategy,
+                        'test': test_full_name,
+                        'methods': found_methods
+                    })
+                else:
+                    failure_reason = []
+                    if failed_methods:
+                        failure_reason.append(f'Failed methods: {", ".join(failed_methods)}')
+                    if missing_methods:
+                        failure_reason.append(f'Missing methods: {", ".join(missing_methods)}')
+                    
+                    execution_summary['test_failures'].append({
+                        'strategy': strategy,
+                        'test': test_full_name,
+                        'reason': '; '.join(failure_reason)
                     })
         
         # After all strategies are tested, save the final, updated dataframe
