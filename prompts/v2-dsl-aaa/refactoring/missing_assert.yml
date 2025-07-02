@@ -4,40 +4,114 @@ Variables:
   TargetMethodName: "The name of the method being tested (the 'Act' part)."
   ReturnValue: "The object or value returned by the target method."
   StateChangingObject: "The object whose state is modified by the 'Act'."
+  TestType: "Whether this is a positive test (expecting success) or negative test (expecting failure/exception)."
 Steps:
   - Description: "Identify the primary 'Act' of the test, which is the method call that changes state or produces a result."
     Action: "IdentifyAction"
     Parameters:
       SourcePattern: "Find the main method invocation that is not part of the setup."
   
-  - Description: "Add one or more assertions to verify the outcome of the 'Act'. This could be checking a return value, or verifying the new state of an object."
+  - Description: "Determine if this is a positive or negative test based on method name, context, and expected behavior."
+    Action: "AnalyzeTestType"
+    Parameters:
+      PositiveIndicators: "Method names like 'test*', 'should*Work', 'verify*Success', regular business logic calls without error handling"
+      NegativeIndicators: "Method names containing 'Invalid', 'Error', 'Exception', 'Fail', 'Bad', 'Null', 'Empty', existing try-catch blocks"
+  
+  - Description: "Add appropriate assertions based on test type. CRITICAL: Most tests are positive tests expecting normal execution without exceptions."
     Action: "AddAssertion"
     Parameters:
       TargetMethod: "The original test method."
-      AssertionPattern: "Based on the action, add a standard assertion. For example: assertEquals(expected, {ReturnValue}); or assertTrue({StateChangingObject}.isSomething());"
+      PositiveTestPattern: |
+        For positive tests (DEFAULT assumption):
+        - If method returns void: Use assertDoesNotThrow(() -> methodCall()) to verify no exception
+        - If method returns a value: Use assertEquals(expected, actual) or assertNotNull(result)
+        - If method changes object state: Use assertTrue(object.isStateChanged()) or assertEquals(expectedState, object.getState())
+      NegativeTestPattern: |
+        For negative tests (ONLY when clearly indicated):
+        - Use assertThrows(SpecificExceptionClass.class, () -> methodCall())
+        - Only use this when the test name or context clearly indicates expecting an exception
+
+TestTypeGuidelines: |
+  IMPORTANT: Default to POSITIVE TESTS unless there are clear indicators of negative testing:
+  
+  POSITIVE TEST (Default - expecting success):
+  - Test method names like: testGuestInterface, testAddItem, shouldCalculateTotal
+  - Business logic methods called in normal flow
+  - No existing exception handling in the original test
+  → Use: assertDoesNotThrow, assertEquals, assertNotNull, assertTrue, etc.
+  
+  NEGATIVE TEST (Only when clearly indicated):
+  - Test method names like: testInvalidInput, shouldThrowExceptionWhenNull, testWithBadData
+  - Methods called with obviously invalid parameters
+  - Existing try-catch blocks expecting exceptions
+  → Use: assertThrows(SpecificException.class, () -> ...)
+
+RequiredImports:
+  - "Keep all existing imports from the original test"
+  - "Add appropriate assertion imports based on the assertion type chosen"
+
+ImportInstructions: |
+  IMPORTANT: When adding assertions, ensure you include any necessary imports.
+  
+  For JUnit 5 (preferred):
+  - static org.junit.jupiter.api.Assertions.assertEquals
+  - static org.junit.jupiter.api.Assertions.assertNotNull
+  - static org.junit.jupiter.api.Assertions.assertTrue
+  - static org.junit.jupiter.api.Assertions.assertDoesNotThrow (for positive tests)
+  - static org.junit.jupiter.api.Assertions.assertThrows (only for negative tests)
+  
+  For JUnit 4 (legacy):
+  - static org.junit.Assert.assertEquals
+  - static org.junit.Assert.assertNotNull
+  - static org.junit.Assert.assertTrue
+  
+  For Hamcrest:
+  - static org.hamcrest.MatcherAssert.assertThat
+  - static org.hamcrest.Matchers.*
+  
+  Include these in the "Refactored Test Case Additional Import Packages" section if not already present.
 
 Example:
-  Before: |
+  PositiveTestBefore: |
     @Test
-    public void testAddItemToCart() {
+    public void testGuestInterface() {
         // Arrange
-        Cart cart = new Cart();
-        Item item = new Item("apple", 1.00);
+        bindGuest();
         
         // Act
-        cart.addItem(item);
+        testService.guestInterface();
     }
-  After: |
+  PositiveTestAfter: |
     @Test
-    public void testAddItemToCart() {
+    public void testGuestInterface() {
         // Arrange
-        Cart cart = new Cart();
-        Item item = new Item("apple", 1.00);
+        bindGuest();
+        
+        // Act & Assert
+        assertDoesNotThrow(() -> {
+            testService.guestInterface();
+        });
+    }
+  NegativeTestBefore: |
+    @Test
+    public void testInvalidCredentials() {
+        // Arrange
+        String invalidUser = null;
         
         // Act
-        cart.addItem(item);
+        authService.authenticate(invalidUser, "password");
+    }
+  NegativeTestAfter: |
+    @Test
+    public void testInvalidCredentials() {
+        // Arrange
+        String invalidUser = null;
         
-        // Assert
-        assertEquals(1, cart.size());
-        assertTrue(cart.contains(item));
-    } 
+        // Act & Assert
+        assertThrows(IllegalArgumentException.class, () -> {
+            authService.authenticate(invalidUser, "password");
+        });
+    }
+  RequiredImports: |
+    static org.junit.jupiter.api.Assertions.assertDoesNotThrow
+    static org.junit.jupiter.api.Assertions.assertThrows 

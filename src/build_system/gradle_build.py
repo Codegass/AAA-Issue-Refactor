@@ -466,10 +466,19 @@ allprojects {
                     overall_success = False
                     error_msg = f"Incremental compilation failed for module {module_path.name}"
                     error_messages.append(error_msg)
-                    logger.error(f"{error_msg}\nError output: {result.stderr}")
+                    
+                    # Combine stderr and stdout for complete error information
+                    full_error_output = ""
+                    if result.stderr:
+                        full_error_output += f"STDERR:\n{result.stderr}\n"
+                    if result.stdout:
+                        full_error_output += f"STDOUT:\n{result.stdout}\n"
+                    
+                    logger.error(f"{error_msg}\nError output:\n{full_error_output}")
                     
                     # Check if this is a setup/fixture related error
-                    if self._is_fixture_error(result.stderr):
+                    combined_output = f"{result.stderr}\n{result.stdout}"
+                    if self._is_fixture_error(combined_output):
                         logger.info(f"Detected fixture/setup error in {module_path.name}, this may be due to incomplete test setup in refactored code")
                 
             except subprocess.TimeoutExpired:
@@ -486,10 +495,14 @@ allprojects {
         if overall_success:
             return True, f"Successfully compiled {len(successful_modules)} modules: {', '.join(successful_modules)}"
         else:
-            # Provide detailed error information
+            # Provide detailed error information including all captured output
             success_info = f"Successful modules: {', '.join(successful_modules)}" if successful_modules else "No modules compiled successfully"
             error_info = "; ".join(error_messages)
-            return False, f"{success_info}. Errors: {error_info}"
+            
+            # Also include the detailed error output from the last failed compilation
+            detailed_error = f"{success_info}. Errors: {error_info}"
+            
+            return False, detailed_error
     
     def _is_fixture_error(self, error_output: str) -> bool:
         """

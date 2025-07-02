@@ -13,6 +13,7 @@ from .llm_client import LLMClient
 from .discovery import TestCase
 from .sanitizer import Sanitizer
 from .usage_tracker import UsageTracker
+from .import_manager import SmartImportManager
 
 logger = logging.getLogger('aif')
 
@@ -129,7 +130,32 @@ class PromptManager:
             formatted_prompt = "Please refactor the test case by strictly following this YAML rule:\n\n"
             formatted_prompt += "```yaml\n"
             formatted_prompt += yaml.dump(rule_content, allow_unicode=True, sort_keys=False, indent=2)
-            formatted_prompt += "```"
+            formatted_prompt += "```\n\n"
+            
+            # Add enhanced instructions for DSL strategy with import awareness
+            formatted_prompt += """
+IMPORTANT INSTRUCTIONS FOR DSL REFACTORING:
+
+1. **Import Requirements**: When using Hamcrest matchers (assertThat, is, not, hasEntry, etc.), you MUST include the necessary imports in your response.
+
+2. **Required Hamcrest Imports**: For any Hamcrest usage with Hamcrest 2.x, include these imports:
+   - static org.hamcrest.MatcherAssert.assertThat
+   - static org.hamcrest.Matchers.* (or specific matchers like static org.hamcrest.Matchers.is)
+
+3. **JUnit Assumptions**: When replacing assertions with assumptions, use:
+   - org.junit.Assume (for JUnit 4)
+   - org.junit.jupiter.api.Assumptions (for JUnit 5)
+
+4. **Response Format**: Always provide imports in the "Refactored Test Case Additional Import Packages" section, even if they seem obvious.
+
+5. **Code Quality**: Ensure the refactored code compiles and follows the DSL patterns specified in the YAML rule.
+
+6. **Static Import Format**: When providing imports, use the exact format without 'import ' prefix or ';' suffix:
+   - Correct: static org.hamcrest.MatcherAssert.assertThat
+   - Correct: static org.hamcrest.Matchers.*
+   - Incorrect: import static org.hamcrest.MatcherAssert.assertThat;
+"""
+            
             return formatted_prompt
         else:
             filename = base_filename + ".md"
@@ -221,13 +247,20 @@ class TestRefactor:
         'testsmell': 'v3-testsmell'
     }
     
-    def __init__(self, prompts_dir: Path, data_folder_path: Path, rftype: str, output_path: Path = None):
+    def __init__(self, prompts_dir: Path, data_folder_path: Path, rftype: str, output_path: Path = None, java_project_path: Path = None):
         prompt_subdir = self.STRATEGY_PROMPT_MAPPING.get(rftype, f"v1-{rftype}")
         self.prompt_manager = PromptManager(prompts_dir / prompt_subdir)
         self.data_folder_path = data_folder_path
         self.llm_client = LLMClient()
         self.sanitizer = Sanitizer()
         self.usage_tracker = UsageTracker(output_path) if output_path else None
+        self.rftype = rftype
+        
+        # Initialize SmartImportManager if java_project_path is provided
+        if java_project_path:
+            self.import_manager = SmartImportManager(java_project_path)
+        else:
+            self.import_manager = None
     
     def load_test_context(self, project_name: str, test_class: str, test_method: str) -> TestContext:
         """Load test context from JSON file."""
@@ -283,7 +316,41 @@ class TestRefactor:
         if reasoning:
             result["reasoning"] = reasoning
         
+        # Enhanced import detection for DSL strategy
+        if self.rftype == 'dsl' and self.import_manager and refactored_code:
+            auto_detected_imports = self._detect_missing_imports_for_dsl(refactored_code, result["additional_imports"])
+            if auto_detected_imports:
+                logger.info(f"Auto-detected {len(auto_detected_imports)} missing imports for DSL strategy")
+                result["additional_imports"].extend(auto_detected_imports)
+        
         return result
+    
+    def _detect_missing_imports_for_dsl(self, code: str, existing_imports: List[str]) -> List[str]:
+        """Detect missing imports specifically for DSL refactored code."""
+        if not self.import_manager:
+            return []
+        
+        # Convert existing imports to set for faster lookup
+        existing_set = set(existing_imports)
+        
+        # Use SmartImportManager to analyze the code
+        requirements = self.import_manager.analyze_code_requirements(code, existing_set)
+        
+        # Convert requirements to import statements
+        missing_imports = []
+        for req in requirements:
+            import_stmt = req.import_statement
+            if not import_stmt.startswith('import '):
+                import_stmt = f"import {import_stmt};"
+            
+            # Remove 'import ' and ';' for consistency with our format
+            clean_import = import_stmt.replace('import ', '').replace(';', '').strip()
+            
+            if clean_import not in existing_set:
+                missing_imports.append(clean_import)
+                logger.debug(f"Auto-detected missing import: {clean_import} ({req.reason})")
+        
+        return missing_imports
     
     def _extract_method_names(self, code: str) -> List[str]:
         """

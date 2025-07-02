@@ -1,24 +1,38 @@
-SmellType: "Multiple AAA"
-Description: "A test method contains multiple Arrange-Act-Assert sequences, violating the Single Responsibility Principle for tests. It should be split into multiple, separate test methods."
+SmellType: Multiple AAA
+Description: A test method contains multiple Arrange-Act-Assert sequences, violating
+  the Single Responsibility Principle for tests. It should be split into multiple,
+  separate test methods.
 Variables:
-  OriginalMethodName: "The name of the original test method."
-  ScenarioName: "A descriptive name for each independent scenario identified within the original method (e.g., 'WithNullInput', 'OnSuccess')."
+  OriginalMethodName: The name of the original test method.
+  ScenarioName: A descriptive name for each independent scenario identified within
+    the original method (e.g., 'WithNullInput', 'OnSuccess').
 Steps:
-  - Description: "Identify each distinct Arrange-Act-Assert block in the original method."
-    Action: "IdentifyBlocks"
-    Parameters:
-      SourcePattern: "Look for repeating patterns of variable initialization (Arrange), object/method invocations (Act), and assertion calls (Assert). Each pattern is a self-contained logical unit."
-  
-  - Description: "For each identified AAA block, create a new, independent method annotated with @Test."
-    Action: "SplitMethod"
-    Parameters:
-      TargetMethod: "{OriginalMethodName}"
-      ExtractedMethodNamePattern: "test{OriginalMethodName}_{ScenarioName}"
-  
-  - Description: "Delete the original test method, as it has been fully replaced by the new, more specific test methods."
-    Action: "DeleteMethod"
-    Parameters:
-      TargetMethod: "{OriginalMethodName}"
+- Description: Identify each distinct Arrange-Act-Assert block in the original method.
+  Action: IdentifyBlocks
+  Parameters:
+    SourcePattern: Look for repeating patterns of variable initialization (Arrange),
+      object/method invocations (Act), and assertion calls (Assert). Each pattern
+      is a self-contained logical unit.
+- Description: For each identified AAA block, create a new, independent method annotated
+    with @Test.
+  Action: SplitMethod
+  Parameters:
+    TargetMethod: '{OriginalMethodName}'
+    ExtractedMethodNamePattern: test{OriginalMethodName}_{ScenarioName}
+- Description: Delete the original test method, as it has been fully replaced by the
+    new, more specific test methods.
+  Action: DeleteMethod
+  Parameters:
+    TargetMethod: '{OriginalMethodName}'
+
+RequiredImports:
+  - "Keep all existing imports from the original test"
+  - "Add any new imports needed for the split methods"
+
+ImportInstructions: |
+  IMPORTANT: When splitting methods, ensure all necessary imports are preserved.
+  If you use any new assertion libraries or utilities, include their imports in the 
+  "Refactored Test Case Additional Import Packages" section.
 
 Example:
   Before: |
@@ -61,4 +75,6 @@ Example:
         boolean dataSent = server.send(data);
         // Assert
         assertTrue(dataSent);
-    } 
+    }
+  RequiredImports: |
+    (Preserve all existing imports from the original test class) 

@@ -14,10 +14,20 @@ Steps:
       TargetPattern: "{PreconditionAssertBlock}"
       ReplacementPattern: "Assume.assumeTrue(condition); // Or Assume.assumeNotNull(...), etc."
 
-  - Description: "Add the required import for the Assume API if it's not already present."
+  - Description: "Add the required import for the Assume API if it's not already present - THIS IS MANDATORY."
     Action: "AddImport"
     Parameters:
       Import: "org.junit.Assume"
+
+RequiredImports:
+  - "org.junit.Assume"
+
+ImportInstructions: |
+  CRITICAL: You MUST include the following import in your "Refactored Test Case Additional Import Packages" section:
+  - org.junit.Assume
+  
+  This import is required for the Assume.assumeTrue() and other assumption methods to work.
+  For JUnit 5 projects, use org.junit.jupiter.api.Assumptions instead.
 
 Example:
   Before: |
@@ -34,8 +44,6 @@ Example:
         assertNotNull(result);
     }
   After: |
-    import org.junit.Assume;
-
     @Test
     public void testDataProcessing() {
         // Arrange
@@ -47,4 +55,6 @@ Example:
 
         // Assert
         assertNotNull(result);
-    } 
+    }
+  RequiredImports: |
+    org.junit.Assume 

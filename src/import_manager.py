@@ -39,6 +39,20 @@ class SmartImportManager:
         r'\bfail\b': 'org.junit.jupiter.api.Assertions.fail',
     }
     
+    # JUnit 4 static imports for backward compatibility
+    JUNIT4_STATIC_IMPORTS = {
+        r'\bassertNull\b': 'org.junit.Assert.assertNull',
+        r'\bassertNotNull\b': 'org.junit.Assert.assertNotNull',
+        r'\bassertTrue\b': 'org.junit.Assert.assertTrue',
+        r'\bassertFalse\b': 'org.junit.Assert.assertFalse',
+        r'\bassertEquals\b': 'org.junit.Assert.assertEquals',
+        r'\bassertNotEquals\b': 'org.junit.Assert.assertNotEquals',
+        r'\bassertSame\b': 'org.junit.Assert.assertSame',
+        r'\bassertNotSame\b': 'org.junit.Assert.assertNotSame',
+        r'\bassertArrayEquals\b': 'org.junit.Assert.assertArrayEquals',
+        r'\bfail\b': 'org.junit.Assert.fail',
+    }
+    
     # JUnit 5 assumptions
     JUNIT5_ASSUMPTIONS = {
         r'\bAssumptions\.assumeTrue\b': 'org.junit.jupiter.api.Assumptions.assumeTrue',
@@ -49,32 +63,63 @@ class SmartImportManager:
         r'\bassumingThat\b': 'org.junit.jupiter.api.Assumptions.assumingThat',
     }
     
-    # Hamcrest matchers (commonly used patterns)
+    # JUnit 4 assumptions for backward compatibility
+    JUNIT4_ASSUMPTIONS = {
+        r'\bAssume\.assumeTrue\b': 'org.junit.Assume.assumeTrue',
+        r'\bAssume\.assumeFalse\b': 'org.junit.Assume.assumeFalse',
+        r'\bAssume\.assumeNotNull\b': 'org.junit.Assume.assumeNotNull',
+        r'\bAssume\.assumeNoException\b': 'org.junit.Assume.assumeNoException',
+        r'\bAssume\.assumeThat\b': 'org.junit.Assume.assumeThat',
+    }
+    
+    # Hamcrest matchers (using org.hamcrest.Matchers for Hamcrest 2.x)
+    # Note: In Hamcrest 2.x+, org.hamcrest.Matchers does exist and should be used
     HAMCREST_MATCHERS = {
-        r'\bassertThat\b': 'org.hamcrest.MatcherAssert.assertThat',
-        r'\bis\(' : 'org.hamcrest.Matchers.is',
-        r'\bisA\(': 'org.hamcrest.Matchers.isA',
-        r'\bequalTo\b': 'org.hamcrest.Matchers.equalTo',
-        r'\bnotNullValue\b': 'org.hamcrest.Matchers.notNullValue',
-        r'\bnullValue\b': 'org.hamcrest.Matchers.nullValue',
-        r'\bhasSize\b': 'org.hamcrest.Matchers.hasSize',
-        r'\bhasItem\b': 'org.hamcrest.Matchers.hasItem',
-        r'\bhasItems\b': 'org.hamcrest.Matchers.hasItems',
-        r'\bcontains\b': 'org.hamcrest.Matchers.contains',
-        r'\bcontainsInAnyOrder\b': 'org.hamcrest.Matchers.containsInAnyOrder',
-        r'\bempty\b': 'org.hamcrest.Matchers.empty',
-        r'\bnot\b': 'org.hamcrest.Matchers.not',
-        r'\banyOf\b': 'org.hamcrest.Matchers.anyOf',
-        r'\ballOf\b': 'org.hamcrest.Matchers.allOf',
-        r'\beveryItem\b': 'org.hamcrest.Matchers.everyItem',
-        r'\bgreaterThan\b': 'org.hamcrest.Matchers.greaterThan',
-        r'\bgreaterThanOrEqualTo\b': 'org.hamcrest.Matchers.greaterThanOrEqualTo',
-        r'\blessThan\b': 'org.hamcrest.Matchers.lessThan',
-        r'\blessThanOrEqualTo\b': 'org.hamcrest.Matchers.lessThanOrEqualTo',
-        r'\bstartsWith\b': 'org.hamcrest.Matchers.startsWith',
-        r'\bendsWith\b': 'org.hamcrest.Matchers.endsWith',
-        r'\bcontainsString\b': 'org.hamcrest.Matchers.containsString',
-        r'\bisIn\b': 'org.hamcrest.Matchers.isIn',
+        r'\bassertThat\s*\(': 'org.hamcrest.MatcherAssert.assertThat',
+        r'\bis\s*\(' : 'org.hamcrest.Matchers.is',
+        r'\bisA\s*\(': 'org.hamcrest.Matchers.isA',
+        r'\bequalTo\s*\(': 'org.hamcrest.Matchers.equalTo',
+        r'\bnotNullValue\s*\(': 'org.hamcrest.Matchers.notNullValue',
+        r'\bnullValue\s*\(': 'org.hamcrest.Matchers.nullValue',
+        r'\bhasSize\s*\(': 'org.hamcrest.Matchers.hasSize',
+        r'\bhasItem\s*\(': 'org.hamcrest.Matchers.hasItem',
+        r'\bhasItems\s*\(': 'org.hamcrest.Matchers.hasItems',
+        r'\bcontains\s*\(': 'org.hamcrest.Matchers.contains',
+        r'\bcontainsInAnyOrder\s*\(': 'org.hamcrest.Matchers.containsInAnyOrder',
+        r'\bempty\s*\(': 'org.hamcrest.Matchers.empty',
+        r'\bnot\s*\(': 'org.hamcrest.Matchers.not',
+        r'\banyOf\s*\(': 'org.hamcrest.Matchers.anyOf',
+        r'\ballOf\s*\(': 'org.hamcrest.Matchers.allOf',
+        r'\beveryItem\s*\(': 'org.hamcrest.Matchers.everyItem',
+        r'\bgreaterThan\s*\(': 'org.hamcrest.Matchers.greaterThan',
+        r'\bgreaterThanOrEqualTo\s*\(': 'org.hamcrest.Matchers.greaterThanOrEqualTo',
+        r'\blessThan\s*\(': 'org.hamcrest.Matchers.lessThan',
+        r'\blessThanOrEqualTo\s*\(': 'org.hamcrest.Matchers.lessThanOrEqualTo',
+        r'\bstartsWith\s*\(': 'org.hamcrest.Matchers.startsWith',
+        r'\bendsWith\s*\(': 'org.hamcrest.Matchers.endsWith',
+        r'\bcontainsString\s*\(': 'org.hamcrest.Matchers.containsString',
+        r'\bisIn\s*\(': 'org.hamcrest.Matchers.isIn',
+        r'\bhasEntry\s*\(': 'org.hamcrest.Matchers.hasEntry',
+        r'\bhasKey\s*\(': 'org.hamcrest.Matchers.hasKey',
+        r'\bhasProperty\s*\(': 'org.hamcrest.Matchers.hasProperty',
+        r'\bhasValue\s*\(': 'org.hamcrest.Matchers.hasValue',
+        r'\binstanceOf\s*\(': 'org.hamcrest.Matchers.instanceOf',
+        r'\btypeCompatibleWith\s*\(': 'org.hamcrest.Matchers.typeCompatibleWith',
+    }
+    
+    # Alternative Hamcrest CoreMatchers (fallback for older versions)
+    HAMCREST_CORE_MATCHERS = {
+        r'\bis\s*\(' : 'org.hamcrest.CoreMatchers.is',
+        r'\bequalTo\s*\(': 'org.hamcrest.CoreMatchers.equalTo',
+        r'\bnotNullValue\s*\(': 'org.hamcrest.CoreMatchers.notNullValue',
+        r'\bnullValue\s*\(': 'org.hamcrest.CoreMatchers.nullValue',
+        r'\bnot\s*\(': 'org.hamcrest.CoreMatchers.not',
+        r'\banyOf\s*\(': 'org.hamcrest.CoreMatchers.anyOf',
+        r'\ballOf\s*\(': 'org.hamcrest.CoreMatchers.allOf',
+        r'\bstartsWith\s*\(': 'org.hamcrest.CoreMatchers.startsWith',
+        r'\bendsWith\s*\(': 'org.hamcrest.CoreMatchers.endsWith',
+        r'\bcontainsString\s*\(': 'org.hamcrest.CoreMatchers.containsString',
+        r'\binstanceOf\s*\(': 'org.hamcrest.CoreMatchers.instanceOf',
     }
     
     # Java utility imports for common stream operations
@@ -89,6 +134,8 @@ class SmartImportManager:
     def __init__(self, project_path: Path):
         self.project_path = project_path
         self.junit_version = self._detect_junit_version()
+        self.hamcrest_version = self._detect_hamcrest_version()
+        logger.debug(f"Detected JUnit {self.junit_version}, Hamcrest {self.hamcrest_version}")
         
     def _detect_junit_version(self) -> str:
         """Detect JUnit version used in the project."""
@@ -120,6 +167,38 @@ class SmartImportManager:
         logger.debug("Could not detect JUnit version, defaulting to JUnit 5")
         return "5"
     
+    def _detect_hamcrest_version(self) -> str:
+        """Detect Hamcrest version used in the project."""
+        # Check for Maven
+        pom_file = self.project_path / "pom.xml"
+        if pom_file.exists():
+            try:
+                content = pom_file.read_text(encoding='utf-8')
+                if 'hamcrest' in content:
+                    # Look for version patterns
+                    if '2.2' in content or '2.1' in content or '2.0' in content:
+                        return "2.x"
+                    elif '1.' in content:
+                        return "1.x"
+            except Exception:
+                pass
+        
+        # Check for Gradle
+        gradle_files = list(self.project_path.glob("**/build.gradle*"))
+        for gradle_file in gradle_files:
+            try:
+                content = gradle_file.read_text(encoding='utf-8')
+                if 'hamcrest' in content:
+                    if '2.2' in content or '2.1' in content or '2.0' in content:
+                        return "2.x"
+                    elif '1.' in content:
+                        return "1.x"
+            except Exception:
+                pass
+        
+        # Default to 2.x since that's what we're adding
+        return "2.x"
+    
     def analyze_code_requirements(self, code: str, existing_imports: Optional[Set[str]] = None) -> List[ImportRequirement]:
         """
         Analyze code and determine required imports, considering existing imports.
@@ -134,8 +213,16 @@ class SmartImportManager:
         requirements = []
         existing_imports = existing_imports or set()
         
+        # Select appropriate JUnit imports based on version
+        if self.junit_version == "5":
+            junit_imports = self.JUNIT5_STATIC_IMPORTS
+            junit_assumptions = self.JUNIT5_ASSUMPTIONS
+        else:
+            junit_imports = self.JUNIT4_STATIC_IMPORTS
+            junit_assumptions = self.JUNIT4_ASSUMPTIONS
+        
         # Check for JUnit assertions
-        for pattern, import_class in self.JUNIT5_STATIC_IMPORTS.items():
+        for pattern, import_class in junit_imports.items():
             if re.search(pattern, code):
                 static_import = f"static {import_class}"
                 pattern_clean = pattern.strip('\\b')
@@ -149,15 +236,15 @@ class SmartImportManager:
                     ))
         
         # Check for JUnit assumptions
-        for pattern, import_class in self.JUNIT5_ASSUMPTIONS.items():
+        for pattern, import_class in junit_assumptions.items():
             if re.search(pattern, code):
-                if 'Assumptions.' in pattern:
+                if 'Assumptions.' in pattern or 'Assume.' in pattern:
                     # Uses qualified name, need class import
                     class_import = import_class.rsplit('.', 1)[0]
                     if not self._is_import_satisfied(class_import, existing_imports):
                         requirements.append(ImportRequirement(
                             import_statement=class_import,
-                            reason=f"Code uses qualified Assumptions",
+                            reason=f"Code uses qualified {class_import.split('.')[-1]}",
                             priority=1
                         ))
                 else:
@@ -171,19 +258,19 @@ class SmartImportManager:
                             priority=1
                         ))
         
-        # Check for Hamcrest matchers
-        has_hamcrest = False
-        for pattern, import_class in self.HAMCREST_MATCHERS.items():
+        # Check for Hamcrest matchers (prefer Matchers over CoreMatchers for 2.x)
+        hamcrest_matchers = self.HAMCREST_MATCHERS if self.hamcrest_version == "2.x" else self.HAMCREST_CORE_MATCHERS
+        
+        for pattern, import_class in hamcrest_matchers.items():
             if re.search(pattern, code):
                 static_import = f"static {import_class}"
-                pattern_clean = pattern.strip('\\b')
+                pattern_clean = pattern.strip('\\b').strip('\\s*\\(')
                 if not self._is_import_satisfied(static_import, existing_imports):
                     requirements.append(ImportRequirement(
                         import_statement=static_import,
                         reason=f"Code uses Hamcrest matcher {pattern_clean}",
                         priority=2
                     ))
-                has_hamcrest = True
         
         # Check for Java utility imports
         for pattern, import_class in self.JAVA_UTIL_IMPORTS.items():
@@ -214,41 +301,60 @@ class SmartImportManager:
         Returns:
             True if the import is already satisfied
         """
-        # Normalize the required import
-        if not required_import.startswith('import '):
-            required_import = f"import {required_import};"
-        elif not required_import.endswith(';'):
-            required_import += ';'
+        # Normalize the required import to include import prefix
+        normalized_required = required_import
+        if not normalized_required.startswith('import '):
+            normalized_required = f"import {normalized_required};"
+        elif not normalized_required.endswith(';'):
+            normalized_required += ';'
         
         # Direct match check
         for existing in existing_imports:
-            if self._normalize_import(existing) == self._normalize_import(required_import):
+            existing_normalized = existing
+            if not existing_normalized.startswith('import '):
+                existing_normalized = f"import {existing_normalized};"
+            elif not existing_normalized.endswith(';'):
+                existing_normalized += ';'
+                
+            if self._normalize_import(existing_normalized) == self._normalize_import(normalized_required):
                 return True
         
         # For static imports, also check if the class is imported with wildcard
-        if 'static' in required_import:
+        if 'static' in normalized_required:
             # Extract class name from static import
             # e.g., "import static org.junit.jupiter.api.Assertions.assertEquals;" -> "org.junit.jupiter.api.Assertions"
-            import_parts = required_import.replace('import static ', '').replace(';', '').strip()
+            import_parts = normalized_required.replace('import static ', '').replace(';', '').strip()
             if '.' in import_parts:
                 class_name = '.'.join(import_parts.split('.')[:-1])
                 wildcard_import = f"import static {class_name}.*;"
                 
                 for existing in existing_imports:
-                    if self._normalize_import(existing) == self._normalize_import(wildcard_import):
+                    existing_normalized = existing
+                    if not existing_normalized.startswith('import '):
+                        existing_normalized = f"import {existing_normalized};"
+                    elif not existing_normalized.endswith(';'):
+                        existing_normalized += ';'
+                        
+                    if self._normalize_import(existing_normalized) == self._normalize_import(wildcard_import):
                         return True
         
         # For regular class imports, check for wildcard imports
         else:
             # Extract package name
             # e.g., "import java.util.stream.Collectors;" -> "java.util.stream"
-            import_content = required_import.replace('import ', '').replace(';', '').strip()
+            import_content = normalized_required.replace('import ', '').replace(';', '').strip()
             if '.' in import_content:
                 package_name = '.'.join(import_content.split('.')[:-1])
                 wildcard_import = f"import {package_name}.*;"
                 
                 for existing in existing_imports:
-                    if self._normalize_import(existing) == self._normalize_import(wildcard_import):
+                    existing_normalized = existing
+                    if not existing_normalized.startswith('import '):
+                        existing_normalized = f"import {existing_normalized};"
+                    elif not existing_normalized.endswith(';'):
+                        existing_normalized += ';'
+                        
+                    if self._normalize_import(existing_normalized) == self._normalize_import(wildcard_import):
                         return True
         
         return False
@@ -288,32 +394,44 @@ class SmartImportManager:
         code_requirements = self.analyze_code_requirements(content, existing_imports)
         
         # Combine manual imports with auto-detected ones
-        all_imports = set(additional_imports) if additional_imports else set()
+        all_imports = set()
         
-        # Add auto-detected imports (only those not already satisfied)
+        # Process manual imports first (clean format)
+        if additional_imports:
+            for imp in additional_imports:
+                cleaned = imp.strip()
+                # Remove any 'import ' prefix and ';' suffix for consistency
+                if cleaned.startswith('import '):
+                    cleaned = cleaned[7:]  # Remove 'import '
+                if cleaned.endswith(';'):
+                    cleaned = cleaned[:-1]  # Remove ';'
+                all_imports.add(cleaned)
+        
+        # Add auto-detected imports (these come without 'import ' prefix)
         for req in code_requirements:
-            all_imports.add(req.import_statement)
-            logger.debug(f"Auto-detected import need: {req.import_statement} ({req.reason})")
+            import_statement = req.import_statement
+            # Remove 'import ' prefix if present for consistency
+            if import_statement.startswith('import '):
+                import_statement = import_statement[7:]
+            if import_statement.endswith(';'):
+                import_statement = import_statement[:-1]
+            all_imports.add(import_statement)
+            logger.debug(f"Auto-detected import need: {import_statement} ({req.reason})")
         
         if not all_imports:
             logger.debug("No new imports needed")
             return content, True
         
-        # Filter out imports that already exist (double check for manual imports)
+        # Filter out imports that already exist
         new_imports = []
         for imp in all_imports:
-            # Normalize import statement
-            normalized = imp.strip()
-            if not normalized.startswith('import '):
-                normalized = f"import {normalized};"
-            elif not normalized.endswith(';'):
-                normalized += ';'
-            
             # Check if this import is already satisfied
-            if not self._is_import_satisfied(normalized.replace('import ', '').replace(';', ''), existing_imports):
-                new_imports.append(normalized)
+            if not self._is_import_satisfied(imp, existing_imports):
+                # Format as proper import statement
+                formatted_import = f"import {imp};"
+                new_imports.append(formatted_import)
             else:
-                logger.debug(f"Import already satisfied: {normalized}")
+                logger.debug(f"Import already satisfied: {imp}")
         
         if not new_imports:
             logger.debug("All required imports already exist or are satisfied")
@@ -339,7 +457,7 @@ class SmartImportManager:
         static_imports.sort()
         regular_imports.sort()
         
-        # Insert imports
+        # Insert imports (reverse order because we're inserting at the same point)
         for imp in reversed(regular_imports + static_imports):
             lines.insert(insertion_point, imp)
             logger.debug(f"Added import: {imp}")

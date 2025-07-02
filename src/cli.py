@@ -120,7 +120,7 @@ def refactoring_phase(test_cases: List[TestCase], java_project_path: Path,
     logger.info("=" * 50)
 
     prompts_dir = Path(__file__).resolve().parent.parent / "prompts"
-    refactor = TestRefactor(prompts_dir, data_folder_path, rftype, output_path)
+    refactor = TestRefactor(prompts_dir, data_folder_path, rftype, output_path, java_project_path)
     recorder = ResultsRecorder(output_path)
 
     # Process ALL test cases regardless of their runnable/pass status from Phase 1
@@ -359,24 +359,66 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
                 imports_str = row[f'{prefix}_refactored_test_case_imports']
                 raw_imports = [imp.strip() for imp in imports_str.split(',') if imp.strip()] if imports_str else []
                 
-                # Convert class path format to proper static import format for JUnit assertions
+                # Enhanced import processing
                 additional_imports = []
                 for imp in raw_imports:
+                    cleaned_imp = imp.strip()
+                    
+                    # Skip empty imports
+                    if not cleaned_imp or cleaned_imp.lower() in ['none', 'n/a', 'empty']:
+                        continue
+                    
+                    # Remove any 'import ' prefix and ';' suffix for consistency
+                    if cleaned_imp.startswith('import '):
+                        cleaned_imp = cleaned_imp[7:]  # Remove 'import '
+                    if cleaned_imp.endswith(';'):
+                        cleaned_imp = cleaned_imp[:-1]  # Remove ';'
+                    
                     # Skip if already properly formatted as static import
-                    if imp.startswith('static '):
-                        additional_imports.append(imp)
+                    if cleaned_imp.startswith('static '):
+                        additional_imports.append(cleaned_imp)
                     # Check if it's a JUnit assertion that should be a static import
-                    elif ('org.junit.jupiter.api.Assertions.' in imp and 
-                          any(assertion in imp for assertion in ['assert', 'fail'])):
+                    elif ('org.junit.jupiter.api.Assertions.' in cleaned_imp and 
+                          any(assertion in cleaned_imp for assertion in ['assert', 'fail'])):
                         # Convert to static import format
-                        additional_imports.append(f"static {imp}")
-                    elif ('org.hamcrest.' in imp and 
-                          any(matcher in imp for matcher in ['Matchers.', 'MatcherAssert.'])):
+                        additional_imports.append(f"static {cleaned_imp}")
+                    elif ('org.junit.Assert.' in cleaned_imp and 
+                          any(assertion in cleaned_imp for assertion in ['assert', 'fail'])):
+                        # Convert JUnit 4 to static import format
+                        additional_imports.append(f"static {cleaned_imp}")
+                    elif ('org.hamcrest.' in cleaned_imp and 
+                          any(matcher in cleaned_imp for matcher in ['Matchers.', 'MatcherAssert.', 'CoreMatchers.'])):
                         # Convert Hamcrest to static import format
-                        additional_imports.append(f"static {imp}")
+                        additional_imports.append(f"static {cleaned_imp}")
+                    elif cleaned_imp == 'org.hamcrest.Matchers.*':
+                        # Handle wildcard Hamcrest import
+                        additional_imports.append(f"static {cleaned_imp}")
                     else:
                         # Keep as regular import
-                        additional_imports.append(imp)
+                        additional_imports.append(cleaned_imp)
+                
+                # For DSL strategy, use SmartImportManager to detect missing imports
+                if strategy == 'dsl':
+                    from .import_manager import SmartImportManager
+                    import_manager = SmartImportManager(java_project_path)
+                    
+                    # Analyze the refactored code for missing imports
+                    existing_imports = set(additional_imports)
+                    requirements = import_manager.analyze_code_requirements(row[code_col], existing_imports)
+                    
+                    # Add any missing imports detected by the smart manager
+                    for req in requirements:
+                        import_stmt = req.import_statement
+                        # Clean the import statement
+                        if import_stmt.startswith('import '):
+                            import_stmt = import_stmt[7:]
+                        if import_stmt.endswith(';'):
+                            import_stmt = import_stmt[:-1]
+                            
+                        if import_stmt not in existing_imports:
+                            additional_imports.append(import_stmt)
+                            logger.info(f"  📦 Auto-detected missing import: {import_stmt} ({req.reason})")
+                
                 success, modified_content, _ = validator.integrate_refactored_method(
                     test_path, target_method_for_removal, row[code_col], strategy,
                     additional_imports, is_one_to_many,
@@ -399,6 +441,7 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
                 compile_success, compile_output = build_manager.build_system.incremental_compile([test_path])
                 if not compile_success:
                         logger.warning(f"  ✗ Incremental compilation failed for {row['test_method_name']}.")
+                        logger.error(f"Compilation error details:\n{compile_output}")
                         df.loc[df.index == row.name, result_col] = "compilation_failed"
                         execution_summary['test_failures'].append({
                             'strategy': strategy,
@@ -406,15 +449,14 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
                             'reason': 'Incremental compilation failed'
                         })
                         
-                        # Extract module name from test path
+                        # Extract module name from test path for better error tracking
+                        module_name = "unknown"
                         for part in test_path.parts:
-                            if part in ['core', 'plugins'] or 'struts' in part or 'tiles' in part:
+                            if part in ['core', 'plugins'] or 'struts' in part or 'tiles' in part or 'samza' in part:
                                 module_name = part
-                                execution_summary['failed_compilation_modules'].add(module_name)
                                 break
+                        execution_summary['failed_compilation_modules'].add(module_name)
                         
-                        if debug_mode:
-                            logger.debug(f"Compile output:\n{compile_output}")
                         continue
                 
                 # Discover test methods to run from the result CSV

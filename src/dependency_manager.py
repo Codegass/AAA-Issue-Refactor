@@ -11,6 +11,7 @@ logger = logging.getLogger('aif')
 class DependencyManager:
     """Manages temporary dependency additions for Maven and Gradle projects."""
     
+    # Use Hamcrest 2.2 which has org.hamcrest.Matchers
     HAMCREST_MAVEN_DEPENDENCY = """        <dependency>
             <groupId>org.hamcrest</groupId>
             <artifactId>hamcrest</artifactId>
@@ -146,19 +147,11 @@ class DependencyManager:
                 
                 content = gradle_file.read_text(encoding='utf-8')
                 
-                # Check if hamcrest is already present
-                if 'org.hamcrest' in content or 'hamcrest' in content:
-                    # Check if it's an old version that needs upgrading
-                    if 'hamcrest-all' in content and 'hamcrestVersion' in content:
-                        logger.debug(f"  Found old hamcrest-all in {relative_path}, will upgrade")
-                        # Continue to upgrade
-                    elif 'hamcrest:2.2' in content or 'AAA-Issue-Refactor' in content:
-                        logger.debug(f"  Modern Hamcrest already present in {relative_path}")
-                        already_present.append(str(relative_path))
-                        continue
-                    else:
-                        logger.debug(f"  Unknown hamcrest version in {relative_path}, will upgrade")
-                        # Continue to upgrade
+                # Check if modern hamcrest is already present
+                if self._is_modern_hamcrest_present_gradle(content):
+                    logger.debug(f"  Modern Hamcrest already present in {relative_path}")
+                    already_present.append(str(relative_path))
+                    continue
                 
                 # Try to add hamcrest
                 modified_content = self._add_to_gradle_dependencies(content)
@@ -191,17 +184,37 @@ class DependencyManager:
             return False, f"Failed to add Hamcrest to any modules: {'; '.join(summary_parts)}"
     
     def _is_hamcrest_present_maven(self, content: str) -> bool:
-        """Check if Hamcrest dependency is already present in Maven POM."""
-        # Look for various forms of hamcrest dependency
+        """Check if modern Hamcrest dependency is already present in Maven POM."""
+        # Look for Hamcrest 2.x dependency specifically
         hamcrest_patterns = [
-            r'<groupId>\s*org\.hamcrest\s*</groupId>',
-            r'hamcrest-.*?</artifactId>',
-            r'<artifactId>\s*hamcrest\s*</artifactId>'
+            r'<groupId>\s*org\.hamcrest\s*</groupId>\s*<artifactId>\s*hamcrest\s*</artifactId>\s*<version>\s*2\.',
+            r'<artifactId>\s*hamcrest\s*</artifactId>\s*<version>\s*2\.',
+            r'hamcrest.*?2\.[0-9]',
         ]
         
         for pattern in hamcrest_patterns:
-            if re.search(pattern, content, re.IGNORECASE | re.MULTILINE):
+            if re.search(pattern, content, re.IGNORECASE | re.MULTILINE | re.DOTALL):
                 return True
+        
+        # Also check for our marker
+        if self.MAVEN_START_MARKER in content:
+            return True
+            
+        return False
+    
+    def _is_modern_hamcrest_present_gradle(self, content: str) -> bool:
+        """Check if modern Hamcrest dependency is already present in Gradle build file."""
+        # Look for modern hamcrest:2.x dependency
+        modern_patterns = [
+            r'hamcrest:2\.[0-9]',
+            r'org\.hamcrest.*?hamcrest.*?2\.[0-9]',
+            r'AAA-Issue-Refactor.*hamcrest',  # Our marker
+        ]
+        
+        for pattern in modern_patterns:
+            if re.search(pattern, content, re.IGNORECASE):
+                return True
+        
         return False
     
     def _insert_hamcrest_maven_minimal(self, content: str) -> str:
@@ -313,26 +326,25 @@ class DependencyManager:
         """Add Hamcrest to Gradle dependencies block."""
         lines = content.split('\n')
         
-        # Check if there's already hamcrest-all and upgrade it
+        # Check if there's already hamcrest-all or old hamcrest version and upgrade it
         hamcrest_upgraded = False
         for i, line in enumerate(lines):
-            if 'hamcrest-all' in line and ('testCompile' in line or 'testImplementation' in line):
-                # Replace old hamcrest-all with modern hamcrest
+            if ('hamcrest' in line.lower() and 
+                ('testCompile' in line or 'testImplementation' in line or 'testApi' in line) and
+                not 'AAA-Issue-Refactor' in line):
+                
+                # Found existing hamcrest dependency
                 old_line = line
                 # Extract indentation
                 indent_match = re.match(r'^(\s*)', line)
                 indent = indent_match.group(1) if indent_match else "    "
                 
-                # Replace with modern hamcrest version
-                if 'testCompile' in line:
-                    new_line = f'{indent}testImplementation "org.hamcrest:hamcrest:2.2"  // Upgraded from hamcrest-all for AAA-Issue-Refactor'
-                else:
-                    new_line = f'{indent}testImplementation "org.hamcrest:hamcrest:2.2"  // Upgraded from hamcrest-all for AAA-Issue-Refactor'
-                
-                lines[i] = f'    // {old_line.strip()}  // Commented out by AAA-Issue-Refactor'
+                # Comment out old line and add new one
+                lines[i] = f'{indent}// {old_line.strip()}  // Commented out by AAA-Issue-Refactor'
+                new_line = f'{indent}testImplementation "org.hamcrest:hamcrest:2.2"  // Added by AAA-Issue-Refactor'
                 lines.insert(i + 1, new_line)
                 hamcrest_upgraded = True
-                logger.debug(f"Upgraded hamcrest-all to hamcrest:2.2")
+                logger.debug(f"Upgraded hamcrest dependency to 2.2")
                 break
         
         if hamcrest_upgraded:
@@ -375,7 +387,7 @@ class DependencyManager:
         if insertion_line != -1:
             # Add comment and dependency
             hamcrest_lines = [
-                f"{base_indent}// AAA-Issue-Refactor: Temporary Hamcrest dependency",
+                f"{base_indent}// AAA-Issue-Refactor: Hamcrest dependency",
                 f"{base_indent}{self.HAMCREST_GRADLE}"
             ]
             
