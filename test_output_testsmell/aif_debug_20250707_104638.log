@@ -1,0 +1,44 @@
+2025-07-07 10:46:38,580 - INFO - logger - ✓ Debug mode enabled. Detailed logs will be saved to: /Users/chenhaowei/Documents/github/AAA-Issue-Refactor/test_output_testsmell/aif_debug_20250707_104638.log
+2025-07-07 10:46:38,580 - INFO - cli - AAA Issue Refactor Tool
+2025-07-07 10:46:38,580 - INFO - cli - ==================================================
+2025-07-07 10:46:38,597 - INFO - utils - Checking GitHub updates... (from https://github.com/Codegass/AAA-Issue-Refactor.git)
+2025-07-07 10:46:38,802 - INFO - utils - ✓ Current version is up to date
+2025-07-07 10:46:38,803 - INFO - cli - Java Project: /Users/chenhaowei/Documents/github/commons-cli
+2025-07-07 10:46:38,803 - INFO - cli - Data Folder: /Users/chenhaowei/Documents/github/AAA-Issue-Refactor/example_data_for_testing/AAA-commons-cli
+2025-07-07 10:46:38,803 - INFO - cli - Output Folder: /Users/chenhaowei/Documents/github/AAA-Issue-Refactor/test_output_testsmell
+2025-07-07 10:46:38,803 - INFO - cli - 
+Mode: Refactor Only (TESTSMELL strategy)
+2025-07-07 10:46:38,803 - INFO - cli - Using specified input file: example_data_for_testing/AAA-commons-cli/commons-cli AAAResults.csv
+2025-07-07 10:46:38,811 - INFO - cli - 
+Phase 2: Test Refactoring (TESTSMELL strategy)
+2025-07-07 10:46:38,811 - INFO - cli - ==================================================
+2025-07-07 10:46:38,873 - DEBUG - import_manager - Detected JUnit 5, Hamcrest 2.x
+2025-07-07 10:46:38,873 - INFO - refactor - Loading test smell data for testsmell strategy...
+2025-07-07 10:46:38,874 - INFO - refactor - Loading test smell data from: /Users/chenhaowei/Documents/github/AAA-Issue-Refactor/example_data_for_testing/AAA-commons-cli/commons-cli-detailed-smells.csv
+2025-07-07 10:46:38,889 - INFO - refactor - Loaded 676 test smell records from commons-cli-detailed-smells.csv
+2025-07-07 10:46:38,889 - INFO - refactor - Total test cases with smell data: 273
+2025-07-07 10:46:38,889 - INFO - cli - Processing 1 test cases (test smell detection will be performed)...
+2025-07-07 10:46:38,889 - INFO - cli - 
+[1/1] Processing: org.apache.commons.cli.bug.BugsTest.test15046
+2025-07-07 10:46:38,889 - INFO - cli - Test Smell Types: Eager Test
+2025-07-07 10:46:38,890 - INFO - cli -   Refactoring...
+2025-07-07 10:46:38,891 - DEBUG - refactor - Refinement loop 1/5, Sanitizer attempt 1/3
+2025-07-07 10:46:38,891 - ERROR - refactor -   ✗ An unexpected error occurred during refactoring: 'PromptManager' object has no attribute '_get_test_smell_types'
+Traceback (most recent call last):
+  File "/Users/chenhaowei/Documents/github/AAA-Issue-Refactor/src/refactor.py", line 720, in refactor_test_case
+    user_prompt = self.prompt_manager.format_refactoring_user_prompt(context, test_case.issue_type)
+  File "/Users/chenhaowei/Documents/github/AAA-Issue-Refactor/src/refactor.py", line 197, in format_refactoring_user_prompt
+    return self._format_testsmell_refactoring_prompt(context, issue_type)
+  File "/Users/chenhaowei/Documents/github/AAA-Issue-Refactor/src/refactor.py", line 220, in _format_testsmell_refactoring_prompt
+    test_smell_types = self._get_test_smell_types(context.test_class_name, context.test_case_name)
+AttributeError: 'PromptManager' object has no attribute '_get_test_smell_types'
+2025-07-07 10:46:38,893 - DEBUG - usage_tracker - Usage recorded: org.apache.commons.cli.bug.BugsTest.test15046 - $0.0000, 0.00s, 0 loops
+2025-07-07 10:46:38,893 - ERROR - cli -   ✗ Refactoring failed: 'PromptManager' object has no attribute '_get_test_smell_types'
+2025-07-07 10:46:38,913 - INFO - cli - 
+✓ Refactoring results for 'testsmell' strategy saved to /Users/chenhaowei/Documents/github/AAA-Issue-Refactor/test_output_testsmell/commons-cli_refactored_result.csv
+2025-07-07 10:46:38,914 - INFO - usage_tracker - Usage statistics saved to /Users/chenhaowei/Documents/github/AAA-Issue-Refactor/test_output_testsmell/commons-cli-usage.csv
+2025-07-07 10:46:38,914 - INFO - usage_tracker - Summary: 1 cases, $0.0000 total cost, 0.00s total time, 0 total loops, 0/1 successful
+2025-07-07 10:46:38,914 - INFO - cli - ✓ Usage statistics saved to /Users/chenhaowei/Documents/github/AAA-Issue-Refactor/test_output_testsmell/commons-cli-usage.csv
+2025-07-07 10:46:38,914 - INFO - cli - ✓ Summary: 0/1 successful, $0.0000 total cost, 0.00s total time
+2025-07-07 10:46:38,915 - INFO - cli - 
+✓ Pipeline completed successfully.

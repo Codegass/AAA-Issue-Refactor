@@ -1,0 +1,30 @@
+RefactorRule:
+  SmellType: Redundant Assertion
+  Description: "Comment out redundant assert statements that do not contribute to the test validation."
+  Steps:
+    - Step:
+        Description: "Identify and comment out redundant assert statements that always evaluate to true or are unnecessary."
+        Action: CommentOutRedundantAssertion
+        Parameters:
+          SourcePattern: |
+            assertEquals(true, true);
+            # Any other redundant assert statements that are identified
+          ReplacementPattern: |
+            // assertEquals(true, true); // Redundant assertion, commented out for clarity.
+  Example:
+    Before: |
+      @Test
+      public void T(){
+        stmt
+        assertEquals(true, true);
+        stmt'
+      }
+    After: |
+      @Test
+      public void T(){
+        stmt
+        // assertEquals(true, true); // Redundant assertion, commented out for clarity.
+        stmt'
+      }
+  Variables:
+    redundantAssertion: "assertEquals(true, true)"

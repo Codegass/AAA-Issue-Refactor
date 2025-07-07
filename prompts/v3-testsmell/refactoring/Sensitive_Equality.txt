@@ -1,0 +1,27 @@
+RefactorRule:
+  SmellType: Sensitive Equality
+  Description: "Avoid using the toString() method for comparing objects in assertions."
+  Steps:
+    - Step:
+        Description: "Extract the value returned by toString() into a separate variable for comparison. Ensure toString() does not directly appear in assertions."
+        Action: ReplaceMethodCall
+        Parameters:
+          TargetPattern: |
+            assertEquals({object1}.toString(), {expectedString});
+          ReplacementPattern: |
+            String actualValue = {object1}.toString();
+            assertEquals({expectedString}, actualValue);
+  Example:
+    Before: |
+      @Test
+      public void T() {
+        Object object1 = new Object();
+        assertEquals(object1.toString(), "expectedString");
+      }
+    After: |
+      @Test
+      public void T() {
+        Object object1 = new Object();
+        String actualValue = object1.toString();
+        assertEquals("expectedString", actualValue);
+      }

@@ -1,0 +1,75 @@
+RefactorRule:
+  SmellType: Exception_Catching_Throwing
+  Description: Ensure tests use assertDoesNotThrow to verify no exceptions are thrown and remove any throws declaration in test methods.
+  Steps:
+    - Step:
+        Description: "Handle try-catch blocks containing 'fail' calls"
+        Action: ReplaceTryCatchWithAssertThrows
+        Parameters:
+          SourcePattern: |
+            try {
+              {tryBlock}
+              fail();
+            } catch ({exception}) {
+              {catchBlock}
+            }
+          ReplacementPattern: |
+            {exception} exception = assertThrows({exception}.class, () -> {
+              {tryBlock}
+            });
+            {catchBlock}
+    - Step:
+        Description: "Handle test methods with 'throws' declaration but no try-catch block"
+        Action: WrapWithAssertDoesNotThrow
+        Parameters:
+          DetectionPattern: |
+            MethodDeclaration [throws!=null && BodyContainsTryCatch=false]
+          ReplacementPattern: |
+            assertDoesNotThrow(() -> {
+              {methodBody}
+            }, "Unexpected exception occurred during the test");
+
+    - Step:
+        Description: "Handle test methods with try-catch blocks without 'fail' calls"
+        Action: ReplaceTryCatchWithoutFail
+        Parameters:
+          SourcePattern: |
+            try {
+              {tryBlock}
+            } catch ({exception}) {
+              {catchBlock}
+            }
+          ReplacementPattern: |
+            assertDoesNotThrow(() -> {
+              {tryBlock}
+            });
+            {catchBlock}
+
+  Example:
+    Before: |
+      @Test
+      public void T() {
+        stmt
+        try {
+            stmt'
+            fail();
+        } catch (E) {
+            evs
+        }
+        stmt''
+      }
+    After: |
+      @Test
+      public void T() {
+        stmt
+        assertThrows(E.class, () -> {
+            stmt'
+        });
+        evs
+        stmt''
+      }
+  Variables:
+    exception: E
+    tryBlock: stmt'
+    catchBlock: evs
+    tryBlockStatement: stmt'i

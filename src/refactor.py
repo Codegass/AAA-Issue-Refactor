@@ -3,6 +3,7 @@
 import json
 import time
 import re
+import pandas as pd
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
@@ -50,8 +51,9 @@ class RefactoringResult:
 class PromptManager:
     """Manages loading and formatting of prompts."""
     
-    def __init__(self, prompts_dir: Path):
+    def __init__(self, prompts_dir: Path, rftype: str = ""):
         self.prompts_dir = prompts_dir
+        self.rftype = rftype
     
     def load_system_prompt(self, prompt_type: str) -> str:
         """Load system prompt from file."""
@@ -116,7 +118,7 @@ class PromptManager:
         normalized_issue = issue_type.lower()
         base_filename = filename_mappings.get(normalized_issue, normalized_issue.replace(" ", "_").replace("-", "_"))
         
-        # Determine file type based on strategy path
+        # Determine file type and handling based on strategy path
         if "v2-dsl-aaa" in str(self.prompts_dir):
             filename = base_filename + ".yml"
             path = self.prompts_dir / "refactoring" / filename
@@ -157,7 +159,45 @@ IMPORTANT INSTRUCTIONS FOR DSL REFACTORING:
 """
             
             return formatted_prompt
+        elif "v3-testsmell" in str(self.prompts_dir):
+            # For testsmell strategy, use .txt files and different naming convention
+            # Convert test smell type to the actual file naming format used in v3-testsmell
+            testsmell_mappings = {
+                "eager test": "Eager_Test",
+                "assertion roulette": "Assertion_Roulette",
+                "conditional test logic": "Conditional_Test_Logic",
+                "conditional test": "Conditional_Test_Logic",
+                "duplicate assert": "Duplicate_Assert", 
+                "exception catching throwing": "Exception_Catching_Throwing",
+                "exception handling": "Exception_Catching_Throwing",
+                "magic number test": "Magic_Number_Test",
+                "magic number": "Magic_Number_Test",
+                "mystery guest": "Mystery_Guest",
+                "print statement": "Print_Statement",
+                "redundant print": "Print_Statement",
+                "redundant assertion": "Redundant_Assertion",
+                "resource optimism": "Resource_Optimism",
+                "sensitive equality": "Sensitive_Equality",
+                "sleepy test": "Sleepy_Test",
+                "verbose test": "Verbose_Test"
+            }
+            
+            normalized_smell = issue_type.lower()
+            mapped_filename = testsmell_mappings.get(normalized_smell)
+            
+            if not mapped_filename:
+                # Try exact match with proper case
+                mapped_filename = issue_type.replace(" ", "_")
+            
+            filename = mapped_filename + ".txt"
+            path = self.prompts_dir / "refactoring" / filename
+            
+            if not path.exists():
+                raise FileNotFoundError(f"Test smell refactoring prompt not found: {path}")
+            
+            return path.read_text(encoding='utf-8')
         else:
+            # AAA strategy uses .md files
             filename = base_filename + ".md"
             path = self.prompts_dir / "refactoring" / filename
             if not path.exists():
@@ -189,8 +229,15 @@ IMPORTANT INSTRUCTIONS FOR DSL REFACTORING:
         
         return " and ".join(frameworks)
 
-    def format_refactoring_user_prompt(self, context: TestContext, issue_type: str) -> str:
+    def format_refactoring_user_prompt(self, context: TestContext, issue_type: str, test_smell_types: List[str] = None) -> str:
         """Format the user prompt for refactoring."""
+        if self.rftype == 'testsmell':
+            return self._format_testsmell_refactoring_prompt(context, issue_type, test_smell_types or [])
+        else:
+            return self._format_aaa_refactoring_prompt(context, issue_type)
+    
+    def _format_aaa_refactoring_prompt(self, context: TestContext, issue_type: str) -> str:
+        """Format the refactoring prompt for AAA and DSL strategies."""
         refactoring_prompt = self.load_refactoring_prompt(issue_type)
         frameworks = self._analyze_frameworks(context.imported_packages, context.test_case_source_code)
         
@@ -205,8 +252,56 @@ IMPORTANT INSTRUCTIONS FOR DSL REFACTORING:
 <Test Case After All Methods>{', '.join(context.after_all_methods)}</Test Case After All Methods>
 <Refactoring Prompt>{refactoring_prompt}</Refactoring Prompt>"""
     
-    def format_validation_user_prompt(self, context: TestContext, refactored_code: str, all_imports: List[str], original_issue: str) -> str:
+    def _format_testsmell_refactoring_prompt(self, context: TestContext, issue_type: str, test_smell_types: List[str]) -> str:
+        """Format the refactoring prompt for testsmell strategy without AAA information."""
+        if not test_smell_types:
+            logger.warning(f"No test smell types found for {context.test_class_name}.{context.test_case_name}")
+            return ""
+        
+        # Format test smell types as comma-separated string
+        smell_types_str = ', '.join(test_smell_types)
+        
+        # Load refactoring prompts for each smell type
+        refactoring_prompts = []
+        for smell_type in test_smell_types:
+            try:
+                prompt = self.load_refactoring_prompt(smell_type)
+                refactoring_prompts.append(f"### Test Smell: {smell_type}\n{prompt}")
+            except FileNotFoundError as e:
+                logger.warning(f"Refactoring prompt not found for smell type '{smell_type}': {e}")
+                continue
+        
+        if not refactoring_prompts:
+            logger.error(f"No refactoring prompts found for any smell types: {test_smell_types}")
+            return ""
+        
+        combined_refactoring_prompt = "\n\n".join(refactoring_prompts)
+        if len(refactoring_prompts) > 1:
+            combined_refactoring_prompt = "This test case has multiple test smells that need to be addressed:\n\n" + combined_refactoring_prompt + "\n\nPlease refactor the test case to address ALL identified test smells comprehensively."
+        
+        frameworks = self._analyze_frameworks(context.imported_packages, context.test_case_source_code)
+        
+        # Create testsmell-specific prompt without AAA information
+        return f"""<Test Smell Types>{smell_types_str}</Test Smell Types>
+<Test Frameworks>{frameworks}</Test Frameworks>
+<Test Case Source Code>{context.test_case_source_code}</Test Case Source Code>
+<Test Case Import Packages>{', '.join(context.imported_packages)}</Test Case Import Packages>
+<Production Function Implementations>{', '.join(context.production_function_implementations)}</Production Function Implementations>
+<Test Case Before Methods>{', '.join(context.before_methods)}</Test Case Before Methods>
+<Test Case After Methods>{', '.join(context.after_methods)}</Test Case After Methods>
+<Test Case Before All Methods>{', '.join(context.before_all_methods)}</Test Case Before All Methods>
+<Test Case After All Methods>{', '.join(context.after_all_methods)}</Test Case After All Methods>
+<Refactoring Rules>{combined_refactoring_prompt}</Refactoring Rules>"""
+    
+    def format_validation_user_prompt(self, context: TestContext, refactored_code: str, all_imports: List[str], original_issue: str, test_smell_types: List[str] = None) -> str:
         """Format the user prompt for validation. Handles multiple issue types."""
+        if self.rftype == 'testsmell':
+            return self._format_testsmell_validation_prompt(context, refactored_code, all_imports, original_issue, test_smell_types or [])
+        else:
+            return self._format_aaa_validation_prompt(context, refactored_code, all_imports, original_issue)
+    
+    def _format_aaa_validation_prompt(self, context: TestContext, refactored_code: str, all_imports: List[str], original_issue: str) -> str:
+        """Format the validation prompt for AAA and DSL strategies."""
         # Parse multiple issue types if present
         issue_types = []
         for separator in [',', ';']:
@@ -236,6 +331,32 @@ IMPORTANT INSTRUCTIONS FOR DSL REFACTORING:
 <Test Case After Methods>{', '.join(context.after_methods)}</Test Case After Methods>
 <Test Case Before All Methods>{', '.join(context.before_all_methods)}</Test Case Before All Methods>
 <Test Case After All Methods>{', '.join(context.after_all_methods)}</Test Case After All Methods>"""
+    
+    def _format_testsmell_validation_prompt(self, context: TestContext, refactored_code: str, all_imports: List[str], original_issue: str, test_smell_types: List[str]) -> str:
+        """Format the validation prompt for testsmell strategy."""
+        if not test_smell_types:
+            logger.warning(f"No test smell types found for validation: {context.test_class_name}.{context.test_case_name}")
+            # Fallback to original issue if no smell data
+            test_smell_types = [original_issue]
+        
+        # Create validation prompt for multiple test smells
+        if len(test_smell_types) == 1:
+            smells_section = f"<original smell type>{test_smell_types[0]}</original smell type>"
+        else:
+            smells_section = f"<original smell types>{', '.join(test_smell_types)}</original smell types>"
+            smells_section += f"\n<individual smell types>"
+            for idx, smell in enumerate(test_smell_types, 1):
+                smells_section += f"\n<smell {idx}>{smell}</smell {idx}>"
+            smells_section += f"\n</individual smell types>"
+        
+        return f"""{smells_section}
+<Test Case Source Code>{refactored_code}</Test Case Source Code>
+<Test Case Import Packages>{', '.join(all_imports)}</Test Case Import Packages>
+<Production Function Implementations>{', '.join(context.production_function_implementations)}</Production Function Implementations>
+<Test Case Before Methods>{', '.join(context.before_methods)}</Test Case Before Methods>
+<Test Case After Methods>{', '.join(context.after_methods)}</Test Case After Methods>
+<Test Case Before All Methods>{', '.join(context.before_all_methods)}</Test Case Before All Methods>
+<Test Case After All Methods>{', '.join(context.after_all_methods)}</Test Case After All Methods>"""
 
 class TestRefactor:
     """Main test refactoring orchestrator."""
@@ -249,7 +370,7 @@ class TestRefactor:
     
     def __init__(self, prompts_dir: Path, data_folder_path: Path, rftype: str, output_path: Path = None, java_project_path: Path = None):
         prompt_subdir = self.STRATEGY_PROMPT_MAPPING.get(rftype, f"v1-{rftype}")
-        self.prompt_manager = PromptManager(prompts_dir / prompt_subdir)
+        self.prompt_manager = PromptManager(prompts_dir / prompt_subdir, rftype)
         self.data_folder_path = data_folder_path
         self.llm_client = LLMClient()
         self.sanitizer = Sanitizer()
@@ -261,7 +382,63 @@ class TestRefactor:
             self.import_manager = SmartImportManager(java_project_path)
         else:
             self.import_manager = None
+        
+        # Load test smell data for testsmell strategy
+        self.test_smell_data = {}
+        if rftype == 'testsmell':
+            self._load_test_smell_data()
     
+    def _load_test_smell_data(self):
+        """Load test smell data from detailed-smells.csv files in the data folder."""
+        logger.info("Loading test smell data for testsmell strategy...")
+        
+        # Find all *-detailed-smells.csv files in the data folder
+        smell_files = list(self.data_folder_path.glob("*-detailed-smells.csv"))
+        
+        if not smell_files:
+            logger.warning("No *-detailed-smells.csv files found in data folder")
+            return
+        
+        for smell_file in smell_files:
+            logger.info(f"Loading test smell data from: {smell_file}")
+            
+            try:
+                df = pd.read_csv(smell_file)
+                # Expected columns: Absolute Path, Test Class Name, Test Case Name, Test Smell Type
+                required_columns = ['Test Class Name', 'Test Case Name', 'Test Smell Type']
+                
+                if not all(col in df.columns for col in required_columns):
+                    logger.warning(f"Skipping {smell_file}: Missing required columns {required_columns}")
+                    continue
+                
+                # Group by test class and method to collect all smell types
+                for _, row in df.iterrows():
+                    test_class = row['Test Class Name']
+                    test_method = row['Test Case Name']
+                    smell_type = row['Test Smell Type']
+                    
+                    if pd.isna(test_class) or pd.isna(test_method) or pd.isna(smell_type):
+                        continue
+                    
+                    key = (test_class, test_method)
+                    if key not in self.test_smell_data:
+                        self.test_smell_data[key] = []
+                    
+                    if smell_type not in self.test_smell_data[key]:
+                        self.test_smell_data[key].append(smell_type)
+                
+                logger.info(f"Loaded {len(df)} test smell records from {smell_file.name}")
+                
+            except Exception as e:
+                logger.error(f"Error loading test smell data from {smell_file}: {e}")
+        
+        logger.info(f"Total test cases with smell data: {len(self.test_smell_data)}")
+    
+    def _get_test_smell_types(self, test_class: str, test_method: str) -> List[str]:
+        """Get test smell types for a specific test case."""
+        key = (test_class, test_method)
+        return self.test_smell_data.get(key, [])
+
     def load_test_context(self, project_name: str, test_class: str, test_method: str) -> TestContext:
         """Load test context from JSON file."""
         json_filename = f"{project_name}_{test_class}_{test_method}.json"
@@ -413,7 +590,7 @@ class TestRefactor:
         return ""
     
     def parse_validation_response(self, response: str) -> Dict[str, Any]:
-        """Parse LLM validation response with robust parsing. Handles multiple issue types."""
+        """Parse LLM validation response with robust parsing. Handles multiple issue types and test smells."""
         result = {
             "original_issue_exists": True,
             "new_issue_exists": False,
@@ -422,46 +599,87 @@ class TestRefactor:
             "individual_issue_status": []  # For tracking multiple issues
         }
         
-        # First try to extract individual issue status (for multiple issues)
-        individual_issues = []
-        issue_count = 1
-        while True:
-            issue_exists_text = self._extract_xml_content(response, f"issue {issue_count} exists")
-            if not issue_exists_text:
-                break
-            individual_issues.append({
-                "issue_number": issue_count,
-                "exists": self._parse_boolean(issue_exists_text)
-            })
-            issue_count += 1
+        # Determine if this is testsmell validation based on response content
+        is_testsmell = self.rftype == 'testsmell' or 'smell' in response.lower()
         
-        if individual_issues:
-            # Multiple issues case
-            result["individual_issue_status"] = individual_issues
-            # Overall original issue exists if ANY individual issue still exists
-            result["original_issue_exists"] = any(issue["exists"] for issue in individual_issues)
-        else:
-            # Single issue case - try legacy format
-            original_exists_text = self._extract_xml_content(response, "original issue type exists")
-            if original_exists_text:
-                result["original_issue_exists"] = self._parse_boolean(original_exists_text)
+        if is_testsmell:
+            # For testsmell validation, look for smell-specific tags
+            individual_smells = []
+            smell_count = 1
+            while True:
+                smell_exists_text = self._extract_xml_content(response, f"smell {smell_count} exists")
+                if not smell_exists_text:
+                    break
+                individual_smells.append({
+                    "issue_number": smell_count,
+                    "exists": self._parse_boolean(smell_exists_text)
+                })
+                smell_count += 1
             
-            # Also try plural format for backward compatibility
-            original_exists_plural = self._extract_xml_content(response, "original issue types exist")
-            if original_exists_plural:
-                result["original_issue_exists"] = self._parse_boolean(original_exists_plural)
+            if individual_smells:
+                # Multiple smells case
+                result["individual_issue_status"] = individual_smells
+                result["original_issue_exists"] = any(smell["exists"] for smell in individual_smells)
+            else:
+                # Single smell case
+                original_exists_text = self._extract_xml_content(response, "original smell type exists")
+                if original_exists_text:
+                    result["original_issue_exists"] = self._parse_boolean(original_exists_text)
+                
+                # Also try plural format
+                original_exists_plural = self._extract_xml_content(response, "original smell types exist")
+                if original_exists_plural:
+                    result["original_issue_exists"] = self._parse_boolean(original_exists_plural)
+            
+            # Extract new smell existence
+            new_exists_text = self._extract_xml_content(response, "new smell type exists")
+            if new_exists_text:
+                result["new_issue_exists"] = self._parse_boolean(new_exists_text)
+            
+            # Extract new smell type
+            new_smell_type = self._extract_xml_content(response, "new smell type")
+            if new_smell_type:
+                result["new_issue_type"] = new_smell_type
+        else:
+            # Original AAA/DSL validation logic
+            individual_issues = []
+            issue_count = 1
+            while True:
+                issue_exists_text = self._extract_xml_content(response, f"issue {issue_count} exists")
+                if not issue_exists_text:
+                    break
+                individual_issues.append({
+                    "issue_number": issue_count,
+                    "exists": self._parse_boolean(issue_exists_text)
+                })
+                issue_count += 1
+            
+            if individual_issues:
+                # Multiple issues case
+                result["individual_issue_status"] = individual_issues
+                result["original_issue_exists"] = any(issue["exists"] for issue in individual_issues)
+            else:
+                # Single issue case - try legacy format
+                original_exists_text = self._extract_xml_content(response, "original issue type exists")
+                if original_exists_text:
+                    result["original_issue_exists"] = self._parse_boolean(original_exists_text)
+                
+                # Also try plural format for backward compatibility
+                original_exists_plural = self._extract_xml_content(response, "original issue types exist")
+                if original_exists_plural:
+                    result["original_issue_exists"] = self._parse_boolean(original_exists_plural)
+            
+            # Extract new issue existence
+            new_exists_text = self._extract_xml_content(response, "new issue type exists")
+            if new_exists_text:
+                result["new_issue_exists"] = self._parse_boolean(new_exists_text)
+            
+            # Extract new issue type
+            new_issue_type = self._extract_xml_content(response, "new issue type")
+            if new_issue_type:
+                result["new_issue_type"] = new_issue_type
         
-        # Extract new issue existence
-        new_exists_text = self._extract_xml_content(response, "new issue type exists")
-        if new_exists_text:
-            result["new_issue_exists"] = self._parse_boolean(new_exists_text)
-        
-        # Extract new issue type
-        new_issue_type = self._extract_xml_content(response, "new issue type")
-        if new_issue_type:
-            result["new_issue_type"] = new_issue_type
-        
-        # Extract reasoning
+        # Extract reasoning (common for both)
         reasoning = self._extract_xml_content(response, "reasoning")
         if reasoning:
             result["reasoning"] = reasoning
@@ -498,6 +716,19 @@ class TestRefactor:
                 test_case.test_method_name
             )
             
+            # For testsmell strategy, check if we have test smell data for this test case
+            if self.rftype == 'testsmell':
+                test_smell_types = self._get_test_smell_types(context.test_class_name, context.test_case_name)
+                if not test_smell_types:
+                    logger.info(f"No test smells found for {context.test_class_name}.{context.test_case_name}, skipping refactoring")
+                    return RefactoringResult(
+                        success=True,
+                        refactored_code=context.test_case_source_code,  # Return original code
+                        error_message="Skipped: No test smells found",
+                        iterations=0,
+                        processing_time=time.time() - start_time
+                    )
+            
             refactoring_system_prompt = self.prompt_manager.load_system_prompt("refactoring")
             validation_system_prompt = self.prompt_manager.load_system_prompt("issue_checking")
             
@@ -518,7 +749,12 @@ class TestRefactor:
                 for attempt in range(max_sanitizer_retries):
                     logger.debug(f"Refinement loop {loop_num + 1}/{max_refinement_loops}, Sanitizer attempt {attempt + 1}/{max_sanitizer_retries}")
                     
-                    user_prompt = self.prompt_manager.format_refactoring_user_prompt(context, test_case.issue_type)
+                    # For testsmell strategy, get test smell types and pass them to the prompt manager
+                    if self.rftype == 'testsmell':
+                        test_smell_types = self._get_test_smell_types(context.test_class_name, context.test_case_name)
+                        user_prompt = self.prompt_manager.format_refactoring_user_prompt(context, test_case.issue_type, test_smell_types)
+                    else:
+                        user_prompt = self.prompt_manager.format_refactoring_user_prompt(context, test_case.issue_type)
                     
                     # Add feedback from the previous validation loop to the user prompt
                     if validation_feedback_for_refactoring:
@@ -576,7 +812,11 @@ class TestRefactor:
                 
                 # 4. Validate the sanitized code
                 all_imports = context.imported_packages + parsed_llm_result.get("additional_imports", [])
-                validation_prompt = self.prompt_manager.format_validation_user_prompt(context, sanitized_code, all_imports, test_case.issue_type)
+                if self.rftype == 'testsmell':
+                    test_smell_types = self._get_test_smell_types(context.test_class_name, context.test_case_name)
+                    validation_prompt = self.prompt_manager.format_validation_user_prompt(context, sanitized_code, all_imports, test_case.issue_type, test_smell_types)
+                else:
+                    validation_prompt = self.prompt_manager.format_validation_user_prompt(context, sanitized_code, all_imports, test_case.issue_type)
                 
                 # The validation session is independent and stateless
                 validation_response = self.llm_client.send_chat_request(validation_system_prompt, [{"role": "user", "content": validation_prompt}])

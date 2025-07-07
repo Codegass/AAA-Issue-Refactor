@@ -1,0 +1,64 @@
+RefactorRule:
+  SmellType: Conditional Test Logic
+  Description: "Extract complex control flow logic into separate helper methods to improve readability and testability."
+  Steps:
+    - Step:
+        Description: "Identify complex control flow constructs"
+        Action: IdentifyComplexControlFlow
+        Parameters:
+          TargetType: Method
+    - Step:
+        Description: "Extract control flow logic into a separate helper method"
+        Action: ExtractMethod
+        Parameters:
+          TargetType: Method
+          SourcePattern: |
+            (if|switch|for|while|do-while) ({condition}) {
+                {statements}
+            }
+          ExtractedMethod: |
+            private boolean/void helperMethodName() {
+                {extractedStatements}
+            }
+    - Step:
+        Description: "Replace complex control flow with a call to the helper method"
+        Action: ReplaceControlFlow
+        Parameters:
+          SourcePattern: |
+            (if|switch|for|while|do-while) ({condition}) {
+                {statements}
+            }
+          ReplacementPattern: |
+            helperMethodName();
+  Example:
+    Before: |
+      @Test
+      public void complexTest() {
+          if (condition1 && condition2) {
+              if (condition3) {
+                  doSomething();
+              } else {
+                  doSomethingElse();
+              }
+          } else {
+              doDefault();
+          }
+      }
+    After: |
+      private boolean isComplexConditionMet() {
+          return condition1 && condition2 && condition3;
+      }
+
+      private void handleComplexScenario() {
+          if (isComplexConditionMet()) {
+              doSomething();
+          } else {
+              doSomethingElse();
+          }
+      }
+
+      @Test
+      public void complexTest() {
+          handleComplexScenario();
+          doDefault();
+      }

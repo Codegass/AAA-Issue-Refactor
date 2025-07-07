@@ -1,0 +1,27 @@
+RefactorRule:
+  SmellType: Print Statement
+  Description: "Comment redundant System.out.println statements that are used for debugging or logging purposes but do not contribute to test validation."
+  Steps:
+    - Step:
+        Description: "Identify and comment out System.out.println statements that are not necessary for test validation, leaving a comment hint."
+        Action: CommentOutPrintStatement
+        Parameters:
+          SourcePattern: |
+            System.out.println("{message}");
+          ReplacementPattern: |
+            // System.out.println("{message}"); // Debugging purpose only, left for reference.
+  Example:
+    Before: |
+      @Test
+      public void T(){
+        stmt
+        System.out.println("Debugging message");
+        stmt'
+      }
+    After: |
+      @Test
+      public void T(){
+        stmt
+        // System.out.println("Debugging message"); // Debugging purpose only, left for reference.
+        stmt'
+      }

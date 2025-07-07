@@ -98,11 +98,17 @@ def load_test_cases_from_csv(input_file: Path) -> List[TestCase]:
     df.fillna('', inplace=True)
     test_cases = []
     for _, row in df.iterrows():
+        # Handle different column name formats
+        project_name = row.get('project_name', row.get('project', ''))
+        test_class_name = row.get('test_class_name', row.get('class_name', ''))
+        test_method_name = row.get('test_method_name', row.get('test_case_name', ''))
+        issue_type = row.get('issue_type', '')
+        
         test_case = TestCase(
-            project_name=row['project_name'],
-            test_class_name=row['test_class_name'],
-            test_method_name=row['test_method_name'],
-            issue_type=row['issue_type']
+            project_name=project_name,
+            test_class_name=test_class_name,
+            test_method_name=test_method_name,
+            issue_type=issue_type
         )
         test_case.test_path = row.get('test_path', 'not found')
         test_case.test_case_loc = row.get('test_case_LOC', 0)
@@ -126,8 +132,16 @@ def refactoring_phase(test_cases: List[TestCase], java_project_path: Path,
     # Process ALL test cases regardless of their runnable/pass status from Phase 1
     # Phase 2 focuses purely on code quality improvement, not execution feasibility
     all_cases = test_cases
-    cases_to_refactor = [tc for tc in all_cases if tc.issue_type.lower().strip() != 'good aaa']
-    logger.info(f"Processing {len(all_cases)} test cases ({len(cases_to_refactor)} need refactoring)...")
+    
+    if rftype == 'testsmell':
+        # For testsmell strategy, we need to check which cases have test smells
+        # This will be handled in the TestRefactor.refactor_test_case method
+        cases_to_refactor = all_cases  # All cases will be checked for test smells
+        logger.info(f"Processing {len(all_cases)} test cases (test smell detection will be performed)...")
+    else:
+        # For AAA and DSL strategies, filter by AAA issue type
+        cases_to_refactor = [tc for tc in all_cases if tc.issue_type.lower().strip() != 'good aaa']
+        logger.info(f"Processing {len(all_cases)} test cases ({len(cases_to_refactor)} need refactoring)...")
 
     results = []
     project_name = ""
@@ -136,7 +150,18 @@ def refactoring_phase(test_cases: List[TestCase], java_project_path: Path,
 
         for i, test_case in enumerate(all_cases, 1):
             logger.info(f"\n[{i}/{len(all_cases)}] Processing: {test_case.test_class_name}.{test_case.test_method_name}")
-            logger.info(f"Issue Type: {test_case.issue_type}")
+            
+            if rftype == 'testsmell':
+                # For testsmell strategy, show test smell information if available
+                if hasattr(refactor, '_get_test_smell_types'):
+                    test_smell_types = refactor._get_test_smell_types(test_case.test_class_name, test_case.test_method_name)
+                    if test_smell_types:
+                        logger.info(f"Test Smell Types: {', '.join(test_smell_types)}")
+                    else:
+                        logger.info("Test Smell Types: None found")
+            else:
+                # For AAA/DSL strategies, show AAA issue type
+                logger.info(f"Issue Type: {test_case.issue_type}")
 
             original_code = ""
             original_imports = []
@@ -147,7 +172,7 @@ def refactoring_phase(test_cases: List[TestCase], java_project_path: Path,
                 original_code = context.test_case_source_code
                 original_imports = context.imported_packages
 
-                if test_case.issue_type.lower().strip() == 'good aaa':
+                if rftype != 'testsmell' and test_case.issue_type.lower().strip() == 'good aaa':
                     logger.info("  ✓ Skipping: No refactoring needed.")
                     refactoring_result = RefactoringResult(
                         success=True, refactored_code=original_code, error_message="Skipped: Good AAA"

@@ -1,0 +1,63 @@
+RefactorRule:
+  SmellType: Duplicate Assert
+  Description: "If the assertion logic is the same but tested with different inputs, prioritize splitting the test into multiple separate methods with a single assertion each."
+  Steps:
+    - Step:
+        Description: "Identify duplicate assertions that test the same condition with different inputs."
+        Action: IdentifySameAssertions
+        Parameters:
+          SourcePattern: |
+            assert(expectedA, ...)
+            assert(expectedB, ...)
+    - Step:
+        Description: "If the assertions are simple and few, split the test into multiple methods, each with a single assertion."
+        Action: SplitMethod
+        Parameters:
+          TargetType: Method
+          Conditions: |
+            - The assertions are simple and do not involve complex variations.
+    - Step:
+        Description: "If there are many similar assertions with significant variations, convert the test to a parameterized test."
+        Action: ConvertToParameterizedTest
+        Parameters:
+          TargetType: Method
+          Conditions: |
+            - There are many test cases with similar logic that would benefit from parameterization.
+            - The variations are extensive, with a large number of inputs or expected outputs.
+    - Step:
+        Description: "Add @CsvSource annotation to declare parameterized values."
+        Action: AddAnnotation
+        Parameters:
+          TargetType: Method
+          Annotation: |
+            @CsvSource({
+              "{paramValues}"
+            })
+    - Step:
+        Description: "Refactor the test method to use parameterized values."
+        Action: RefactorMethod
+        Parameters:
+          SourcePattern: |
+            public void T() {
+              {originalStatements}
+            }
+          ReplacementPattern: |
+            public void T({parameterNames}) {
+              {refactoredStatements}
+            }
+  Example:
+    Before: |
+      @Test
+      public void testDuplicateAssertions() {
+        assertEquals(expectedA, methodUnderTest(a));
+        assertEquals(expectedB, methodUnderTest(b));
+      }
+    After: |
+      @Test
+      public void testWithInputA() {
+        assertEquals(expectedA, methodUnderTest(a));
+      }
+      @Test
+      public void testWithInputB() {
+        assertEquals(expectedB, methodUnderTest(b));
+      }

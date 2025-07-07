@@ -1,0 +1,36 @@
+2025-07-07 10:45:36,953 - INFO - logger - ✓ Debug mode enabled. Detailed logs will be saved to: /Users/chenhaowei/Documents/github/AAA-Issue-Refactor/test_output_testsmell/aif_debug_20250707_104536.log
+2025-07-07 10:45:36,953 - INFO - cli - AAA Issue Refactor Tool
+2025-07-07 10:45:36,953 - INFO - cli - ==================================================
+2025-07-07 10:45:36,970 - INFO - utils - Checking GitHub updates... (from https://github.com/Codegass/AAA-Issue-Refactor.git)
+2025-07-07 10:45:37,176 - INFO - utils - ✓ Current version is up to date
+2025-07-07 10:45:37,176 - INFO - cli - Java Project: /Users/chenhaowei/Documents/github/commons-cli
+2025-07-07 10:45:37,176 - INFO - cli - Data Folder: /Users/chenhaowei/Documents/github/AAA-Issue-Refactor/example_data_for_testing/AAA-commons-cli
+2025-07-07 10:45:37,176 - INFO - cli - Output Folder: /Users/chenhaowei/Documents/github/AAA-Issue-Refactor/test_output_testsmell
+2025-07-07 10:45:37,176 - INFO - cli - 
+Mode: Refactor Only (TESTSMELL strategy)
+2025-07-07 10:45:37,176 - INFO - cli - Using specified input file: example_data_for_testing/AAA-commons-cli/commons-cli AAAResults.csv
+2025-07-07 10:45:37,189 - CRITICAL - cli - 
+✗ An unexpected error occurred: 'project_name'
+Traceback (most recent call last):
+  File "/Users/chenhaowei/Documents/github/AAA-Issue-Refactor/.venv/lib/python3.10/site-packages/pandas/core/indexes/base.py", line 3812, in get_loc
+    return self._engine.get_loc(casted_key)
+  File "pandas/_libs/index.pyx", line 167, in pandas._libs.index.IndexEngine.get_loc
+  File "pandas/_libs/index.pyx", line 196, in pandas._libs.index.IndexEngine.get_loc
+  File "pandas/_libs/hashtable_class_helper.pxi", line 7088, in pandas._libs.hashtable.PyObjectHashTable.get_item
+  File "pandas/_libs/hashtable_class_helper.pxi", line 7096, in pandas._libs.hashtable.PyObjectHashTable.get_item
+KeyError: 'project_name'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/chenhaowei/Documents/github/AAA-Issue-Refactor/src/cli.py", line 1151, in main
+    test_cases = load_test_cases_from_csv(input_file)
+  File "/Users/chenhaowei/Documents/github/AAA-Issue-Refactor/src/cli.py", line 102, in load_test_cases_from_csv
+    project_name=row['project_name'],
+  File "/Users/chenhaowei/Documents/github/AAA-Issue-Refactor/.venv/lib/python3.10/site-packages/pandas/core/series.py", line 1130, in __getitem__
+    return self._get_value(key)
+  File "/Users/chenhaowei/Documents/github/AAA-Issue-Refactor/.venv/lib/python3.10/site-packages/pandas/core/series.py", line 1246, in _get_value
+    loc = self.index.get_loc(label)
+  File "/Users/chenhaowei/Documents/github/AAA-Issue-Refactor/.venv/lib/python3.10/site-packages/pandas/core/indexes/base.py", line 3819, in get_loc
+    raise KeyError(key) from err
+KeyError: 'project_name'

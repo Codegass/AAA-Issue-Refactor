@@ -1,0 +1,48 @@
+RefactorRule:
+  SmellType: Eager Test
+  Description: "Refactor test methods to group related assertions logically and extract reusable setup logic into private methods."
+  Steps:
+    - Step1:
+        Description: "Extract shared setup logic into a reusable, private method and ensure it is used across all relevant tests."
+        Action: ExtractSetupMethod
+        Parameters:
+          Condition: "If multiple tests share the same setup logic."
+          MethodNamePattern: setupTest{OriginalMethodName}
+    - Step2:
+        Description: "Group related assertions into cohesive sub-tests while retaining necessary setup logic."
+        Action: GroupAssertions
+        Parameters:
+          GroupBy: LogicalConcern
+    - Step3:
+        Description: "Create new test methods for each cohesive group of assertions and ensure readability."
+        Action: CreateTestMethods
+        Parameters:
+          IncludeSetup: True
+          NamePattern: test{OriginalMethodName}_{Concern}
+  Example:
+    Before: |
+      @Test
+      public void testExample() {
+          setup();
+          assertEquals(1, methodA());
+          assertTrue(methodB());
+      }
+    After: |
+      private void setupTestExample() {
+          setup();
+      }
+
+      @Test
+      public void testExample_MethodA() {
+          setupTestExample();
+          assertEquals(1, methodA());
+      }
+
+      @Test
+      public void testExample_MethodB() {
+          setupTestExample();
+          assertTrue(methodB());
+      }
+  Variables:
+    OriginalMethodName: The name of the original test method.
+    LogicalConcern: The logical aspect tested (e.g., a specific API, validation, or behavior).

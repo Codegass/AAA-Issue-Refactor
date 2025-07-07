@@ -1,0 +1,11 @@
+2025-07-07 10:45:27,061 - INFO - logger - ✓ Debug mode enabled. Detailed logs will be saved to: /Users/chenhaowei/Documents/github/AAA-Issue-Refactor/test_output_testsmell/aif_debug_20250707_104527.log
+2025-07-07 10:45:27,061 - INFO - cli - AAA Issue Refactor Tool
+2025-07-07 10:45:27,061 - INFO - cli - ==================================================
+2025-07-07 10:45:27,070 - INFO - utils - Checking GitHub updates... (from https://github.com/Codegass/AAA-Issue-Refactor.git)
+2025-07-07 10:45:27,332 - INFO - utils - ✓ Current version is up to date
+2025-07-07 10:45:27,332 - INFO - cli - Java Project: /Users/chenhaowei/Documents/github/commons-cli
+2025-07-07 10:45:27,332 - INFO - cli - Data Folder: /Users/chenhaowei/Documents/github/AAA-Issue-Refactor/example_data_for_testing/AAA-commons-cli
+2025-07-07 10:45:27,332 - INFO - cli - Output Folder: /Users/chenhaowei/Documents/github/AAA-Issue-Refactor/test_output_testsmell
+2025-07-07 10:45:27,332 - INFO - cli - 
+Mode: Refactor Only (TESTSMELL strategy)
+2025-07-07 10:45:27,333 - ERROR - cli - No discovery file found. Please run discovery phase first or specify --input-file
