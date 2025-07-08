@@ -10,6 +10,7 @@ class Sanitizer:
         Performs a series of cleaning operations on a block of code.
         - Removes markdown code fences (```java ... ```).
         - Extracts content from CDATA sections (<![CDATA[ ... ]]>).
+        - Extracts only methods from full class definitions.
         
         Args:
             code: The raw code string from the LLM.
@@ -38,7 +39,157 @@ class Sanitizer:
         if lines and re.match(r'^\s*```', lines[-1]):
             lines.pop(-1)
             
-        return '\n'.join(lines).strip()
+        # 3. Extract only methods if full class definition is present
+        cleaned_code = '\n'.join(lines).strip()
+        cleaned_code = self._extract_methods_only(cleaned_code)
+        
+        return cleaned_code
+
+    def _extract_methods_only(self, code: str) -> str:
+        """
+        Extract only method definitions from a complete class, removing class declaration,
+        package statements, imports, and other class-level elements.
+        
+        Args:
+            code: The code string that might contain a full class definition.
+            
+        Returns:
+            Only the method definitions as a string.
+        """
+        if not code.strip():
+            return code
+        
+        # Check if this looks like a full class definition
+        if not self._contains_class_definition(code):
+            # Not a full class, return as-is
+            return code
+        
+        lines = code.split('\n')
+        method_lines = []
+        inside_method = False
+        brace_count = 0
+        current_method_lines = []
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i].rstrip()
+            stripped_line = line.strip()
+            
+            # Skip package and import statements
+            if stripped_line.startswith(('package ', 'import ')):
+                i += 1
+                continue
+            
+            # Skip class/interface declaration
+            if re.match(r'^\s*(public\s+|private\s+|protected\s+)?(abstract\s+)?(class|interface|enum)\s+\w+', line):
+                i += 1
+                continue
+            
+            # Skip standalone opening/closing braces that belong to class definition
+            if stripped_line in ['{', '}'] and not inside_method:
+                i += 1
+                continue
+            
+            # Check if this line starts a method (including annotations)
+            if self._is_method_start_or_annotation(stripped_line):
+                # Look ahead to find the actual method declaration
+                method_start_idx = i
+                while method_start_idx < len(lines):
+                    method_line = lines[method_start_idx].strip()
+                    
+                    # Skip annotations and empty lines
+                    if method_line.startswith('@') or method_line == '' or method_line.startswith('//'):
+                        method_start_idx += 1
+                        continue
+                    
+                    # Check if this is a method declaration
+                    if self._is_method_declaration(method_line):
+                        # Start collecting method lines from the first annotation/method declaration
+                        inside_method = True
+                        brace_count = 0
+                        current_method_lines = []
+                        
+                        # Collect all lines from annotations to method
+                        for j in range(i, method_start_idx + 1):
+                            current_method_lines.append(lines[j])
+                            
+                        # Count opening braces in the method declaration line
+                        brace_count += method_line.count('{') - method_line.count('}')
+                        
+                        i = method_start_idx + 1
+                        break
+                    else:
+                        break
+                else:
+                    # No method declaration found, skip this line
+                    i += 1
+                continue
+            
+            # If we're inside a method, collect lines and track braces
+            if inside_method:
+                current_method_lines.append(line)
+                brace_count += line.count('{') - line.count('}')
+                
+                # If brace count reaches 0, we've reached the end of the method
+                if brace_count == 0:
+                    # Add the complete method to our collection
+                    method_lines.extend(current_method_lines)
+                    method_lines.append('')  # Add spacing between methods
+                    inside_method = False
+                    current_method_lines = []
+            
+            i += 1
+        
+        # If we were still inside a method at the end, add what we have
+        if inside_method and current_method_lines:
+            method_lines.extend(current_method_lines)
+        
+        # Join and clean up the result
+        result = '\n'.join(method_lines).strip()
+        
+        # Remove excessive empty lines
+        while '\n\n\n' in result:
+            result = result.replace('\n\n\n', '\n\n')
+            
+        return result
+    
+    def _contains_class_definition(self, code: str) -> bool:
+        """Check if the code contains a full class definition."""
+        # Look for class declaration patterns
+        class_pattern = re.compile(r'^\s*(public\s+|private\s+|protected\s+)?(abstract\s+)?(class|interface|enum)\s+\w+', re.MULTILINE)
+        
+        # Also check for package statement as indicator of full class
+        has_package = re.search(r'^\s*package\s+[\w.]+;', code, re.MULTILINE)
+        has_class = class_pattern.search(code)
+        
+        return bool(has_package or has_class)
+    
+    def _is_method_start_or_annotation(self, line: str) -> bool:
+        """Check if line is the start of a method (including annotations)."""
+        if not line:
+            return False
+        
+        # Check for annotations
+        if line.startswith('@'):
+            return True
+        
+        # Check for method declaration
+        return self._is_method_declaration(line)
+    
+    def _is_method_declaration(self, line: str) -> bool:
+        """Check if line contains a method declaration."""
+        if not line:
+            return False
+        
+        # Pattern for method declarations (simplified)
+        # Matches: [modifiers] [return_type] method_name(params)
+        method_pattern = re.compile(
+            r'^\s*(public|private|protected)?\s*(static\s+)?(final\s+)?'
+            r'([\w<>\[\]]+\s+)+'  # Return type (including generics and arrays)
+            r'(\w+)\s*\('  # Method name and opening parenthesis
+        )
+        
+        return bool(method_pattern.match(line))
 
     def was_last_clean_successful(self, raw_code: str, sanitized_code: str, threshold: int = 50) -> bool:
         """
