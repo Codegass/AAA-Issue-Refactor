@@ -110,12 +110,51 @@ def load_test_cases_from_csv(input_file: Path) -> List[TestCase]:
             test_method_name=test_method_name,
             issue_type=issue_type
         )
-        test_case.test_path = row.get('test_path', 'not found')
+        
+        # Handle test_path - try to get from CSV or auto-discover
+        test_path = row.get('test_path', 'not found')
+        if test_path == 'not found' or not test_path:
+            # Auto-discover test file path based on class name
+            discovered_path = _discover_test_file_path(test_class_name, input_file.parent.parent)
+            test_case.test_path = discovered_path if discovered_path else 'not found'
+            if discovered_path:
+                logger.info(f"Auto-discovered test path: {test_class_name} -> {discovered_path}")
+        else:
+            test_case.test_path = test_path
+            
         test_case.test_case_loc = row.get('test_case_LOC', 0)
         test_case.runable = row.get('runable', 'no')
         test_case.pass_status = row.get('pass', 'no')
         test_cases.append(test_case)
     return test_cases
+
+
+def _discover_test_file_path(test_class_name: str, search_base: Path) -> Optional[str]:
+    """Auto-discover test file path based on class name."""
+    if not test_class_name:
+        return None
+    
+    # Convert package.ClassName to path format
+    class_path = test_class_name.replace('.', '/') + '.java'
+    
+    # Common test directory patterns
+    test_dirs = [
+        'src/test/java',
+        'test/java', 
+        'src/test',
+        'test'
+    ]
+    
+    # Search in parent directories (go up from data folder to find project root)
+    search_paths = [search_base, search_base.parent, search_base.parent.parent]
+    
+    for base_path in search_paths:
+        for test_dir in test_dirs:
+            potential_path = base_path / test_dir / class_path
+            if potential_path.exists():
+                return str(potential_path)
+    
+    return None
 
 
 def refactoring_phase(test_cases: List[TestCase], java_project_path: Path,
@@ -368,18 +407,45 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
                         original_content = f.read()
                     original_method_names = _extract_method_names_from_code(original_content)
                     
-                    for ref_method in refactored_method_names:
-                        if ref_method in original_method_names and ref_method != csv_method_name:
-                            # Found a conflict - we should remove the conflicting method instead
-                            target_method_for_removal = ref_method
-                            logger.info(f"  📝 Method name mismatch detected:")
-                            logger.info(f"     CSV method: {csv_method_name}")
-                            logger.info(f"     Refactored method: {ref_method}")
-                            logger.info(f"     Will comment out: {target_method_for_removal}")
-                            break
+                    # For testsmell strategy, handle method name conflicts more intelligently
+                    if strategy == 'testsmell':
+                        method_conflicts = []
+                        for ref_method in refactored_method_names:
+                            if ref_method in original_method_names:
+                                method_conflicts.append(ref_method)
+                        
+                        if method_conflicts:
+                            logger.info(f"  ⚠️ Testsmell method name conflicts detected: {', '.join(method_conflicts)}")
+                            logger.info(f"  🔄 Will remove original method '{csv_method_name}' to avoid conflicts")
+                            # For testsmell, always remove the original method when there are conflicts
+                            target_method_for_removal = csv_method_name
+                    else:
+                        # Original logic for AAA/DSL strategies
+                        for ref_method in refactored_method_names:
+                            if ref_method in original_method_names and ref_method != csv_method_name:
+                                # Found a conflict - we should remove the conflicting method instead
+                                target_method_for_removal = ref_method
+                                logger.info(f"  📝 Method name mismatch detected:")
+                                logger.info(f"     CSV method: {csv_method_name}")
+                                logger.info(f"     Refactored method: {ref_method}")
+                                logger.info(f"     Will comment out: {target_method_for_removal}")
+                                break
                 
                 # Integrate the code
-                is_one_to_many = row['issue_type'].lower().strip() == "multiple aaa"
+                # Determine if this is one-to-many refactoring based on strategy and method count
+                if strategy == 'testsmell':
+                    # For testsmell strategy, check if we have multiple refactored methods
+                    num_refactored_methods = len(refactored_method_names) if refactored_method_names else 0
+                    is_one_to_many = num_refactored_methods > 1
+                    
+                    # Special handling for test smells that typically create multiple methods
+                    if row.get('issue_type', '').lower() in ['eager test', 'multiple acts', 'conditional test logic']:
+                        is_one_to_many = True
+                        
+                    logger.info(f"  📊 Testsmell strategy: {num_refactored_methods} methods generated, one-to-many: {is_one_to_many}")
+                else:
+                    # For AAA and DSL strategies, use the original logic
+                    is_one_to_many = row['issue_type'].lower().strip() == "multiple aaa"
                 # Parse additional imports, filtering out empty strings
                 imports_str = row[f'{prefix}_refactored_test_case_imports']
                 raw_imports = [imp.strip() for imp in imports_str.split(',') if imp.strip()] if imports_str else []
