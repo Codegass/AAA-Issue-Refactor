@@ -1,76 +1,168 @@
-SmellType: "Obscure Assert"
-Description: "The Assert block contains complex logic (e.g., loops, conditionals, or multiple statements), which makes the test's intent difficult to understand. It should be refactored into a clear, declarative assertion using a library like Hamcrest."
+SmellType: Obscure Assert
+Description: The test contains complex assertion logic that is difficult to understand or has high cyclomatic complexity. Assertions should be simple and clear to make test failures easy to diagnose.
 Variables:
-  OriginalAssertBlock: "The original, complex block of code in the Assert section."
-  ActualValue: "The actual object or collection being verified in the assertion."
-  HamcrestMatcher: "A descriptive Hamcrest matcher that encapsulates the complex logic."
+  ComplexAssertBlock: The block containing complex assertion logic with high cyclomatic complexity.
+  SimplifiedAssertPattern: The simplified assertion pattern using clearer assertion methods or Hamcrest matchers.
 Steps:
-  - Description: "Identify the complex assertion logic block at the end of the method."
-    Action: "IdentifyBlock"
+  - Description: Identify complex assertion logic with high cyclomatic complexity (> 2), including nested conditions, loops, or complex boolean expressions.
+    Action: IdentifyComplexLogic
     Parameters:
-      SourcePattern: "Look for a block containing loops (for, while), conditionals (if), or multiple assertions against the same object."
+      SourcePattern: Find assertion code with if-else statements, loops, multiple boolean operators, or nested conditions.
 
-  - Description: "Replace the entire complex assertion block with a single, expressive 'assertThat' call using an appropriate Hamcrest matcher."
-    Action: "ReplaceBlock"
+  - Description: CRITICAL - Analyze the assertion context and available variables before simplification.
+    Action: AnalyzeAssertionContext
     Parameters:
-      TargetPattern: "{OriginalAssertBlock}"
-      ReplacementPattern: "assertThat({ActualValue}, {HamcrestMatcher});"
+      ContextAnalysis: |
+        Before simplifying assertions, verify:
+        1. What variables and objects are available in the current scope?
+        2. What types are these variables (collections, primitives, objects)?
+        3. What specific values or states are being tested?
+        4. What imports are available for assertion methods?
+        5. Whether Hamcrest matchers would be more appropriate than native JUnit assertions?
 
-  - Description: "Add the static import for Hamcrest's 'assertThat' method - THIS IS MANDATORY."
-    Action: "AddImport"
+  - Description: Replace complex assertion logic with simplified, more readable assertions using appropriate JUnit assertions or Hamcrest matchers.
+    Action: ReplaceBlock
     Parameters:
-      Import: "static org.hamcrest.MatcherAssert.assertThat"
+      TargetPattern: "{ComplexAssertBlock}"
+      ReplacementPattern: "{SimplifiedAssertPattern}"
+      SimplificationGuidelines: |
+        Choose the most appropriate simplification strategy:
+        1. **For Collection Testing**: Use Hamcrest matchers like hasSize(), contains(), hasItem()
+        2. **For Object Property Testing**: Use hasProperty(), allOf(), anyOf()
+        3. **For Null/Value Testing**: Use notNullValue(), is(), equalTo()
+        4. **For Type Testing**: Use instanceOf(), isA()
+        5. **For Custom Logic**: Break into multiple simple assertions rather than one complex one
+      CompilationSafety: |
+        MANDATORY REQUIREMENTS for simplified assertions:
+        1. Ensure all required imports are included (especially Hamcrest)
+        2. Verify that all variables used in assertions are in scope and properly typed
+        3. Use static imports for cleaner, more readable code
+        4. Ensure Hamcrest matchers are compatible with the object types being tested
+        5. Handle any potential null values appropriately
+        6. Maintain the same test logic and coverage as the original complex assertion
 
-  - Description: "Add static imports for all Hamcrest matchers used in the code - THIS IS MANDATORY."
-    Action: "AddImport"
+  - Description: Add required imports for simplified assertion methods, especially Hamcrest matchers.
+    Action: AddImport
     Parameters:
-      Import: "static org.hamcrest.Matchers.*"
+      Import: Appropriate imports based on the assertions used
 
 RequiredImports:
   - "static org.hamcrest.MatcherAssert.assertThat"
   - "static org.hamcrest.Matchers.*"
+  - "static org.junit.jupiter.api.Assertions.*"
 
 ImportInstructions: |
   CRITICAL: You MUST include the following imports in your "Refactored Test Case Additional Import Packages" section:
-  - static org.hamcrest.MatcherAssert.assertThat
-  - static org.hamcrest.Matchers.*
+  - static org.hamcrest.MatcherAssert.assertThat (for Hamcrest assertThat usage)
+  - static org.hamcrest.Matchers.* (for Hamcrest matchers like is, not, hasSize, etc.)
   
-  These imports are required for compilation. Do NOT omit them.
+  HAMCREST USAGE GUIDELINES:
+  - Use assertThat(actual, matcher) pattern for more expressive assertions
+  - Common matchers: is(), not(), hasSize(), contains(), hasItem(), notNullValue(), nullValue()
+  - For collections: hasSize(int), contains(items...), hasItem(item), empty()
+  - For objects: hasProperty(name, value), instanceOf(Class), isA(Class)
+  - For combining: allOf(matchers...), anyOf(matchers...)
+
+CompilationSafety: |
+  Ensure the simplified assertion code:
+  1. Has all necessary imports for assertion and matcher methods
+  2. Uses correct syntax for Hamcrest assertThat expressions
+  3. Matches the data types properly (e.g., don't use string matchers on numbers)
+  4. Handles generic types correctly in collection matchers
+  5. Maintains proper variable scope for all tested objects
+  6. Uses appropriate null-safe patterns when necessary
+
+SimplificationStrategies: |
+  Replace complex logic patterns with simpler alternatives:
+  
+  **Complex Boolean Logic** → **Multiple Simple Assertions**:
+  Instead of: if(result != null && result.size() > 0 && result.contains("test")) { assertTrue(true); }
+  Use: assertThat(result, notNullValue()); assertThat(result, hasSize(greaterThan(0))); assertThat(result, hasItem("test"));
+  
+  **Loop-Based Checking** → **Collection Matchers**:
+  Instead of: for(Item item : items) { assertTrue(item.isValid()); }
+  Use: assertThat(items, everyItem(hasProperty("valid", is(true))));
+  
+  **Complex Conditions** → **Composed Matchers**:
+  Instead of: assertTrue((obj.getType() == Type.A || obj.getType() == Type.B) && obj.getValue() > 0);
+  Use: assertThat(obj, allOf(hasProperty("type", anyOf(is(Type.A), is(Type.B))), hasProperty("value", greaterThan(0))));
 
 Example:
   Before: |
     @Test
-    public void testFindAdminUser() {
+    public void testComplexValidation() {
         // Arrange
-        List<User> users = repository.findAll();
+        List<String> results = service.getResults();
         
-        // Act
-        User admin = null;
-        for (User user : users) {
-            if (user.isAdmin()) {
-                admin = user;
-                break;
+        // Assert (complex logic)
+        boolean isValid = true;
+        if (results == null || results.isEmpty()) {
+            isValid = false;
+        } else {
+            for (String result : results) {
+                if (result == null || result.trim().isEmpty()) {
+                    isValid = false;
+                    break;
+                }
             }
         }
-
-        // Assert
-        assertNotNull(admin);
-        assertEquals("Alice", admin.getName());
+        assertTrue("Results should be valid", isValid);
     }
   After: |
     @Test
-    public void testFindAdminUser() {
+    public void testComplexValidation() {
         // Arrange
-        List<User> users = repository.findAll();
+        List<String> results = service.getResults();
         
-        // Act & Assert
-        assertThat(users, hasItem(
-            allOf(
-                hasProperty("name", equalTo("Alice")),
-                hasProperty("admin", is(true))
-            )
-        ));
+        // Assert (simplified with Hamcrest)
+        assertThat(results, notNullValue());
+        assertThat(results, not(empty()));
+        assertThat(results, everyItem(notNullValue()));
+        assertThat(results, everyItem(not(isEmptyOrNullString())));
     }
   RequiredImports: |
     static org.hamcrest.MatcherAssert.assertThat
-    static org.hamcrest.Matchers.* 
+    static org.hamcrest.Matchers.*
+
+HamcrestMatcherGuidelines: |
+  Common Hamcrest patterns for cleaner assertions:
+  
+  **Collections**:
+  - hasSize(int) - check collection size
+  - empty() - check if collection is empty
+  - hasItem(item) - check if collection contains item
+  - contains(items...) - check exact order and content
+  - containsInAnyOrder(items...) - check content regardless of order
+  - everyItem(matcher) - check all items match criteria
+  
+  **Objects**:
+  - is(value) - simple equality check
+  - not(matcher) - negation
+  - notNullValue() / nullValue() - null checks
+  - hasProperty(name, value) - check object property
+  - instanceOf(Class) - type checking
+  
+  **Combining**:
+  - allOf(matchers...) - all matchers must match (AND)
+  - anyOf(matchers...) - any matcher can match (OR)
+  
+  **Numbers**:
+  - greaterThan(value) - numeric comparison
+  - lessThan(value) - numeric comparison
+  - greaterThanOrEqualTo(value) - numeric comparison
+
+TypeSafetyGuidelines: |
+  Ensure type compatibility when using Hamcrest matchers:
+  - Use appropriate matchers for the data type (String, Integer, Collection, etc.)
+  - Be careful with generic types in collections (List<String> vs List<Object>)
+  - Use isA(Class) or instanceOf(Class) for type checking
+  - Handle potential ClassCastException with proper type checks
+
+CRITICAL_OUTPUT_RESTRICTIONS: |
+  - DO NOT output entire test classes
+  - DO NOT include package declarations or imports in the code section
+  - DO NOT include class definitions like "public class TestClass {}"
+  - DO NOT create @Before, @BeforeEach, @After, @AfterEach methods
+  - DO NOT create setUp() or tearDown() methods
+  - ONLY output the refactored test method(s)
+  - ENSURE each method is completely self-contained and compilable 

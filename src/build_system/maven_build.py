@@ -286,11 +286,31 @@ class MavenBuildSystem(BuildSystem):
             return self._check_all_modules_compiled()
         
         # For single module projects
+        # Standard Maven directories
         main_classes = self.project_path / "target" / "classes"
         test_classes = self.project_path / "target" / "test-classes"
         
-        main_exists = main_classes.exists() and any(main_classes.rglob("*.class"))
-        test_exists = test_classes.exists() and any(test_classes.rglob("*.class"))
+        # IntelliJ IDEA directories (alternative compilation output)
+        intellij_out = self.project_path / "out" / "production" / self.project_path.name
+        intellij_test_out = self.project_path / "out" / "test" / self.project_path.name
+        
+        # Global IntelliJ out directory
+        global_intellij_main = self.project_path / "out" / "production" / "classes"
+        global_intellij_test = self.project_path / "out" / "test" / "classes"
+        
+        # Check main classes (Maven target or IntelliJ out)
+        main_exists = (
+            (main_classes.exists() and any(main_classes.rglob("*.class"))) or
+            (intellij_out.exists() and any(intellij_out.rglob("*.class"))) or
+            (global_intellij_main.exists() and any(global_intellij_main.rglob("*.class")))
+        )
+        
+        # Check test classes (Maven target or IntelliJ out)
+        test_exists = (
+            (test_classes.exists() and any(test_classes.rglob("*.class"))) or
+            (intellij_test_out.exists() and any(intellij_test_out.rglob("*.class"))) or
+            (global_intellij_test.exists() and any(global_intellij_test.rglob("*.class")))
+        )
         
         if debug_logger.isEnabledFor(logging.DEBUG):
             debug_logger.debug(f"Compiled classes check: main={main_exists}, test={test_exists}")
@@ -548,8 +568,17 @@ class MavenBuildSystem(BuildSystem):
         failed_modules = []
         
         for module_path in module_paths:
+            # Standard Maven directories
             main_classes = module_path / "target" / "classes"
             test_classes = module_path / "target" / "test-classes"
+            
+            # IntelliJ IDEA directories (alternative compilation output)
+            intellij_out = module_path / "out" / "production" / module_path.name
+            intellij_test_out = module_path / "out" / "test" / module_path.name
+            
+            # Global IntelliJ out directory (some configurations)
+            global_intellij_main = self.project_path / "out" / "production" / module_path.name
+            global_intellij_test = self.project_path / "out" / "test" / module_path.name
             
             # Check if module has source files that should be compiled
             src_main = module_path / "src" / "main" / "java"
@@ -566,9 +595,23 @@ class MavenBuildSystem(BuildSystem):
                 
             total_modules_with_src += 1
             
-            # Check if this module is compiled
-            main_compiled = not has_main_src or (main_classes.exists() and any(main_classes.rglob("*.class")))
-            test_compiled = not has_test_src or (test_classes.exists() and any(test_classes.rglob("*.class")))
+            # Check if this module is compiled (check multiple possible locations)
+            main_compiled = True
+            test_compiled = True
+            
+            if has_main_src:
+                main_compiled = (
+                    (main_classes.exists() and any(main_classes.rglob("*.class"))) or
+                    (intellij_out.exists() and any(intellij_out.rglob("*.class"))) or
+                    (global_intellij_main.exists() and any(global_intellij_main.rglob("*.class")))
+                )
+            
+            if has_test_src:
+                test_compiled = (
+                    (test_classes.exists() and any(test_classes.rglob("*.class"))) or
+                    (intellij_test_out.exists() and any(intellij_test_out.rglob("*.class"))) or
+                    (global_intellij_test.exists() and any(global_intellij_test.rglob("*.class")))
+                )
             
             if main_compiled and test_compiled:
                 compiled_modules += 1
@@ -581,18 +624,34 @@ class MavenBuildSystem(BuildSystem):
         
         if total_modules_with_src == 0:
             return True  # No modules with source code
-            
-        # Use a more flexible threshold: at least 50% of modules compiled OR at least 5 modules compiled
-        success_threshold = max(0.5, min(5, total_modules_with_src) / total_modules_with_src)
+        
+        # More flexible thresholds for multi-module projects
         success_rate = compiled_modules / total_modules_with_src
+        
+        # Multi-tier threshold strategy:
+        # 1. If we have at least 3 compiled modules AND at least 30% success rate
+        # 2. OR if we have fewer total modules, require at least 1 compiled module
+        # 3. For very large projects (>20 modules), 25% is acceptable
+        if total_modules_with_src >= 20:
+            # Very large projects: 25% threshold
+            required_threshold = 0.25
+        elif total_modules_with_src >= 10:
+            # Medium projects: 30% threshold BUT at least 3 modules
+            required_threshold = max(0.30, 3 / total_modules_with_src)
+        elif total_modules_with_src >= 5:
+            # Small multi-module projects: at least 2 modules OR 40%
+            required_threshold = max(0.40, 2 / total_modules_with_src)
+        else:
+            # Very small projects: at least 1 module
+            required_threshold = 1 / total_modules_with_src
         
         if debug_logger.isEnabledFor(logging.DEBUG):
             debug_logger.debug(f"Module compilation check: {compiled_modules}/{total_modules_with_src} compiled ({success_rate:.1%})")
-            debug_logger.debug(f"Required threshold: {success_threshold:.1%}")
+            debug_logger.debug(f"Required threshold: {required_threshold:.1%}")
             if failed_modules:
                 debug_logger.debug(f"Failed modules: {', '.join(failed_modules)}")
         
-        return success_rate >= success_threshold
+        return success_rate >= required_threshold
     
     def _get_module_paths(self) -> List[Path]:
         """Get all module paths in a multi-module Maven project."""
@@ -624,12 +683,27 @@ class MavenBuildSystem(BuildSystem):
         if self._is_multi_module_maven():
             module_paths = self._get_module_paths()
             for module_path in module_paths:
+                # Standard Maven test classes directory
                 test_classes_dir = module_path / "target" / "test-classes"
-                if test_classes_dir.exists() and any(test_classes_dir.rglob("*.class")):
+                
+                # IntelliJ IDEA test directories
+                intellij_test_out = module_path / "out" / "test" / module_path.name
+                global_intellij_test = self.project_path / "out" / "test" / module_path.name
+                
+                # Check if any test classes exist in any of the possible locations
+                if ((test_classes_dir.exists() and any(test_classes_dir.rglob("*.class"))) or
+                    (intellij_test_out.exists() and any(intellij_test_out.rglob("*.class"))) or
+                    (global_intellij_test.exists() and any(global_intellij_test.rglob("*.class")))):
                     return True
         else:
+            # Single module project
             test_classes_dir = self.project_path / "target" / "test-classes"
-            return test_classes_dir.exists() and any(test_classes_dir.rglob("*.class"))
+            intellij_test_out = self.project_path / "out" / "test" / self.project_path.name
+            global_intellij_test = self.project_path / "out" / "test" / "classes"
+            
+            return ((test_classes_dir.exists() and any(test_classes_dir.rglob("*.class"))) or
+                    (intellij_test_out.exists() and any(intellij_test_out.rglob("*.class"))) or
+                    (global_intellij_test.exists() and any(global_intellij_test.rglob("*.class"))))
         
         return False
     

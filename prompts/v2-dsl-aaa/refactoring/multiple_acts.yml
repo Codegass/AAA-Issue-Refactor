@@ -1,27 +1,78 @@
-SmellType: "Multiple Acts"
-Description: "The test method contains multiple distinct actions (Act blocks), making it unclear which behavior is actually being tested. Each test should focus on verifying a single action or behavior."
+SmellType: Multiple Acts
+Description: The test method contains multiple distinct actions (Act blocks), making it unclear which behavior is actually being tested. Each test should focus on verifying a single action or behavior.
 Variables:
-  OriginalMethodName: "The name of the original test method."
-  PrimaryAction: "The main, most important action being tested."
-  SecondaryAction: "Additional actions that should be in a separate test."
-  ScenarioName: "A descriptive name for the scenario each action represents."
+  OriginalMethodName: The name of the original test method.
+  PrimaryAction: The main, most important action being tested.
+  SecondaryAction: Additional actions that should be in a separate test.
+  ScenarioName: A descriptive name for the scenario each action represents.
 Steps:
-  - Description: "Identify the multiple, distinct 'Act' calls within the test method. These are method invocations that change the state of the system under test."
-    Action: "IdentifyBlocks"
+  - Description: Identify the multiple, distinct 'Act' calls within the test method. These are method invocations that change the state of the system under test.
+    Action: IdentifyBlocks
     Parameters:
-      SourcePattern: "Look for multiple, unrelated method calls on the primary object being tested between the Arrange and Assert blocks."
+      SourcePattern: Look for multiple, unrelated method calls on the primary object being tested between the Arrange and Assert blocks.
 
-  - Description: "Split the original test into multiple new tests, where each new test focuses on a single 'Act'."
-    Action: "SplitMethod"
+  - Description: CRITICAL - Analyze action dependencies and execution order before splitting.
+    Action: AnalyzeActionDependencies
+    Parameters:
+      DependencyAnalysis: |
+        For each Act operation, determine:
+        1. What prior actions must occur for this action to work correctly
+        2. What state changes from previous actions are required
+        3. What objects/resources must be initialized before this action
+        4. Whether this action modifies state that subsequent actions depend on
+        5. What configuration or setup is needed from earlier operations
+
+  - Description: Split the original test into multiple new tests, where each new test focuses on a single 'Act'. CRITICAL - Preserve all necessary action dependencies.
+    Action: SplitMethod
     Parameters:
       TargetMethod: "{OriginalMethodName}"
       ExtractedMethodNamePattern: "test{ScenarioName}"
       GroupBy: "Each distinct action."
+      DependencyPreservation: |
+        MANDATORY for each split method:
+        1. Include ALL prerequisite actions that the target action depends on
+        2. Reproduce the exact state that existed when this action originally executed
+        3. Ensure all dependent objects are properly initialized and configured
+        4. Include any intermediate steps required for the action to succeed
+        5. Maintain proper execution sequence for dependent operations
+        6. Preserve any required side effects from previous actions
   
-  - Description: "Delete the original, unfocused test method."
-    Action: "DeleteMethod"
+  - Description: Delete the original, unfocused test method.
+    Action: DeleteMethod
     Parameters:
       TargetMethod: "{OriginalMethodName}"
+
+RequiredImports:
+  - "Keep all existing imports from the original test"
+  - "Add any new imports needed for the split methods"
+
+ImportInstructions: |
+  IMPORTANT: When splitting methods, ensure all necessary imports are preserved.
+  If you use any new assertion libraries or utilities, include their imports in the 
+  "Refactored Test Case Additional Import Packages" section.
+  
+  CRITICAL ACTION DEPENDENCY PRESERVATION:
+  - ALWAYS analyze what each action needs: what must happen BEFORE it can execute successfully
+  - Include all prerequisite actions in the same logical sequence as the original test
+  - When testing action B that depends on action A, always include action A as setup
+  - Preserve the exact execution order and state transitions from the original test
+  - Each test must recreate the complete context needed for its specific action
+
+CompilationSafety: |
+  Each split test method MUST:
+  1. Include all necessary object instantiation and initialization
+  2. Perform all prerequisite method calls in the correct sequence
+  3. Reproduce any required state modifications from earlier actions
+  4. Be completely self-contained and executable without external dependencies
+  5. Handle any required resource management (files, connections, etc.)
+
+ActionDependencyGuidelines: |
+  Common action dependency patterns to preserve:
+  - Connection → Operation: If action requires active connection, include connection setup
+  - Initialize → Configure → Use: Include all configuration steps before usage
+  - Create → Populate → Query: Include object creation and population before querying
+  - Login → Execute → Logout: Include authentication before protected operations
+  - Load → Process → Save: Include loading before processing operations
 
 Example:
   Before: |
@@ -33,7 +84,7 @@ Example:
         
         // Act 1
         service.register(user);
-        // Act 2
+        // Act 2 (depends on registration!)
         service.activate(user);
         
         // Assert
@@ -52,19 +103,56 @@ Example:
         
         // Assert
         assertTrue(service.isRegistered(user));
-        assertFalse(service.isActive(user)); // An activated user would be a different test
+        assertFalse(service.isActive(user)); // Should not be active yet
     }
     
     @Test
     public void testUserActivation() {
-        // Arrange
+        // Arrange (MUST include registration prerequisite!)
         User user = new User("Bob");
         UserService service = new UserService();
-        service.register(user); // Activation requires prior registration
-
+        service.register(user); // ← CRITICAL: Include prerequisite action
+        
         // Act
         service.activate(user);
         
         // Assert
         assertTrue(service.isActive(user));
-    } 
+    }
+
+MethodNamingGuidelines: |
+  Use specific, action-focused names that clearly describe the behavior being tested:
+  - Focus on the specific action/behavior being verified
+  - Use domain terminology that describes the business function
+  - Include context when actions have prerequisites
+  - Examples of GOOD names:
+    * testUserRegistration
+    * testUserActivationAfterRegistration
+    * testDataProcessingAfterInitialization
+    * testFileUploadAfterConnection
+  - Examples of BAD names:
+    * testUserLifecycle1
+    * testUserLifecycle2
+    * testMethodPart1
+
+DependencyVerificationChecklist: |
+  Before generating each split method, ensure:
+  ✓ What actions must occur before this action can succeed?
+  ✓ Are all prerequisite objects created and properly initialized?
+  ✓ Are all required state transitions from previous actions included?
+  ✓ Does this action require specific configuration or setup from earlier operations?
+  ✓ Are any external resources (databases, files, services) properly prepared?
+  ✓ Is the execution sequence preserved from the original test?
+  ✓ Can this method run independently and produce the same result as in the original context?
+
+CRITICAL_OUTPUT_RESTRICTIONS: |
+  - DO NOT create any @Before, @BeforeEach, @After, @AfterEach methods
+  - DO NOT create setUp() or tearDown() methods
+  - DO NOT include any shared setup code outside of individual test methods
+  - Each test method must be completely self-contained with its own Arrange section
+  - If common setup is needed, duplicate it in each test method rather than extracting it
+  - DO NOT output entire test classes
+  - DO NOT include package declarations or imports in the code section
+  - DO NOT include class definitions like "public class TestClass {}"
+  - ONLY output the refactored test method(s)
+  - ENSURE each method is completely self-contained and compilable 

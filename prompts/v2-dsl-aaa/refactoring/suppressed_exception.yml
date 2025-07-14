@@ -1,25 +1,58 @@
-SmellType: "Suppressed Exception"
-Description: "The test uses a try-catch block to swallow an expected exception, often followed by assertions outside the catch block. This hides the actual test's intent. The correct approach is to explicitly assert that an exception is thrown."
+SmellType: Suppressed Exception
+Description: The test uses a try-catch block to swallow an expected exception, often followed by assertions outside the catch block. This hides the actual test's intent. The correct approach is to explicitly assert that an exception is thrown.
 Variables:
-  TryCatchBlock: "The try-catch block that suppresses the exception."
-  ActionThatThrows: "The specific line of code inside the try block that is expected to throw an exception."
-  ExpectedException: "The class name of the exception that is expected to be thrown (e.g., 'IllegalArgumentException.class')."
+  TryCatchBlock: The try-catch block that suppresses the exception.
+  ActionThatThrows: The specific line of code inside the try block that is expected to throw an exception.
+  ExpectedException: The class name of the exception that is expected to be thrown (e.g., 'IllegalArgumentException.class').
 Steps:
-  - Description: "Identify the try-catch block where an exception is caught and ignored or handled improperly."
-    Action: "IdentifyBlock"
+  - Description: Identify the try-catch block where an exception is caught and ignored or handled improperly.
+    Action: IdentifyBlock
     Parameters:
-      SourcePattern: "Find a 'try { ... } catch (Exception e) { /* empty or logging */ }' structure."
+      SourcePattern: Find a 'try { ... } catch (Exception e) { /* empty or logging */ }' structure.
 
-  - Description: "Replace the entire try-catch block with a call to 'assertThrows' or a similar API (like TestNG's @Test(expected=...))."
-    Action: "ReplaceBlock"
+  - Description: Replace the entire try-catch block with a call to 'assertThrows' or a similar API (like TestNG's @Test(expected=...)).
+    Action: ReplaceBlock
     Parameters:
       TargetPattern: "{TryCatchBlock}"
       ReplacementPattern: "assertThrows({ExpectedException}, () -> { {ActionThatThrows} });"
 
-  - Description: "Add the required import for the 'assertThrows' method if it is not already present."
-    Action: "AddImport"
+  - Description: Add the required import for the 'assertThrows' method if it is not already present.
+    Action: AddImport
     Parameters:
       Import: "org.junit.jupiter.api.Assertions.assertThrows"
+
+RequiredImports:
+  - "static org.junit.jupiter.api.Assertions.assertThrows"
+
+ImportInstructions: |
+  CRITICAL: You MUST include the following import in your "Refactored Test Case Additional Import Packages" section:
+  - static org.junit.jupiter.api.Assertions.assertThrows
+  
+  This import is required for compilation. Do NOT omit it.
+
+CompilationSafety: |
+  Ensure the refactored test method:
+  1. Has the correct import for assertThrows method
+  2. Uses the most specific exception type available (not just Exception.class)
+  3. Properly captures all necessary variables in the lambda expression (final or effectively final)
+  4. Maintains proper variable scope for all objects used in the exception-throwing operation
+  5. Preserves any necessary setup code outside the assertThrows call
+  6. Uses correct syntax for lambda expressions: () -> { code; }
+
+ExceptionHandlingGuidelines: |
+  When refactoring suppressed exceptions:
+  - Use the most specific exception type that the method is expected to throw
+  - Ensure all variables referenced in the lambda are accessible (final or effectively final)
+  - Preserve any setup code that needs to run before the exception-throwing operation
+  - Remove any misleading assertions that were testing state after the exception was swallowed
+  - If multiple statements in the try block, identify which one actually throws the exception
+
+VariableScopeGuidelines: |
+  For lambda expressions in assertThrows:
+  - All captured variables must be final or effectively final
+  - If you need to modify variables, consider splitting the test or using different approach
+  - Ensure all objects referenced in the lambda are properly initialized
+  - Handle any potential null pointer issues in the setup code
 
 Example:
   Before: |
@@ -39,9 +72,6 @@ Example:
         assertEquals(8080, config.getPort()); // This assertion is misleading
     }
   After: |
-    import static org.junit.jupiter.api.Assertions.assertThrows;
-    import org.junit.jupiter.api.Test;
-
     @Test
     public void testSetInvalidPort() {
         // Arrange
@@ -51,4 +81,15 @@ Example:
         assertThrows(IllegalArgumentException.class, () -> {
             config.setPort(-1);
         });
-    } 
+    }
+  RequiredImports: |
+    static org.junit.jupiter.api.Assertions.assertThrows
+
+CRITICAL_OUTPUT_RESTRICTIONS: |
+  - DO NOT output entire test classes
+  - DO NOT include package declarations or imports in the code section
+  - DO NOT include class definitions like "public class TestClass {}"
+  - DO NOT create @Before, @BeforeEach, @After, @AfterEach methods
+  - DO NOT create setUp() or tearDown() methods
+  - ONLY output the refactored test method(s)
+  - ENSURE each method is completely self-contained and compilable 

@@ -1,21 +1,21 @@
-SmellType: "Assert Pre-condition"
-Description: "The test contains an assertion in the Arrange block, before the Act block. These assertions check the state of the test environment rather than the outcome of the test itself. They should be replaced with an 'assume' statement."
+SmellType: Assert Pre-condition
+Description: The test contains an assertion in the Arrange block, before the Act block. These assertions check the state of the test environment rather than the outcome of the test itself. They should be replaced with an 'assume' statement.
 Variables:
-  PreconditionAssertBlock: "The block of one or more assertions in the Arrange section."
+  PreconditionAssertBlock: The block of one or more assertions in the Arrange section.
 Steps:
-  - Description: "Identify any assertion statements that exist before the main 'Act' of the test method."
-    Action: "IdentifyBlock"
+  - Description: Identify any assertion statements that exist before the main 'Act' of the test method.
+    Action: IdentifyBlock
     Parameters:
-      SourcePattern: "Find calls to 'assertEquals', 'assertTrue', etc., that appear before the primary method invocation being tested."
+      SourcePattern: Find calls to 'assertEquals', 'assertTrue', etc., that appear before the primary method invocation being tested.
 
-  - Description: "Replace the precondition assertion block with a JUnit 'Assume.assume...' call. This ensures the test is skipped if the precondition is not met, rather than failing."
-    Action: "ReplaceBlock"
+  - Description: Replace the precondition assertion block with a JUnit 'Assume.assume...' call. This ensures the test is skipped if the precondition is not met, rather than failing.
+    Action: ReplaceBlock
     Parameters:
       TargetPattern: "{PreconditionAssertBlock}"
       ReplacementPattern: "Assume.assumeTrue(condition); // Or Assume.assumeNotNull(...), etc."
 
-  - Description: "Add the required import for the Assume API if it's not already present - THIS IS MANDATORY."
-    Action: "AddImport"
+  - Description: Add the required import for the Assume API if it's not already present.
+    Action: AddImport
     Parameters:
       Import: "org.junit.Assume"
 
@@ -24,10 +24,28 @@ RequiredImports:
 
 ImportInstructions: |
   CRITICAL: You MUST include the following import in your "Refactored Test Case Additional Import Packages" section:
-  - org.junit.Assume
+  - org.junit.Assume (for JUnit 4)
+  - org.junit.jupiter.api.Assumptions (for JUnit 5)
+  
+  CRITICAL - Parameter Order for Assume API:
+  
+  JUnit 4 (org.junit.Assume):
+  - Single parameter: Assume.assumeTrue(condition)
+  - With message: Assume.assumeTrue("message", condition)  // MESSAGE FIRST!
+  
+  JUnit 5 (org.junit.jupiter.api.Assumptions):
+  - Single parameter: Assumptions.assumeTrue(condition)
+  - With message: Assumptions.assumeTrue(condition, "message")  // CONDITION FIRST!
   
   This import is required for the Assume.assumeTrue() and other assumption methods to work.
-  For JUnit 5 projects, use org.junit.jupiter.api.Assumptions instead.
+
+CompilationSafety: |
+  Ensure the refactored test method:
+  1. Has the correct import for Assume/Assumptions based on JUnit version
+  2. Uses correct parameter order for the detected JUnit version
+  3. Properly maintains variable scope for condition checks
+  4. Preserves the original test logic after the assumption
+  5. Uses appropriate assumption methods for the condition type
 
 Example:
   Before: |
@@ -57,4 +75,13 @@ Example:
         assertNotNull(result);
     }
   RequiredImports: |
-    org.junit.Assume 
+    org.junit.Assume
+
+CRITICAL_OUTPUT_RESTRICTIONS: |
+  - DO NOT output entire test classes
+  - DO NOT include package declarations or imports in the code section
+  - DO NOT include class definitions like "public class TestClass {}"
+  - DO NOT create @Before, @BeforeEach, @After, @AfterEach methods
+  - DO NOT create setUp() or tearDown() methods
+  - ONLY output the refactored test method(s)
+  - ENSURE each method is completely self-contained and compilable 

@@ -1,34 +1,55 @@
-SmellType: "Missing Assert"
-Description: "A test method performs an action (the Act) but lacks any assertions to verify the outcome. A test without assertions is not a real test, as it cannot fail."
+SmellType: Missing Assert
+Description: A test method performs an action (the Act) but lacks any assertions to verify the outcome. A test without assertions is not a real test, as it cannot fail.
 Variables:
-  TargetMethodName: "The name of the method being tested (the 'Act' part)."
-  ReturnValue: "The object or value returned by the target method."
-  StateChangingObject: "The object whose state is modified by the 'Act'."
-  TestType: "Whether this is a positive test (expecting success) or negative test (expecting failure/exception)."
+  TargetMethodName: The name of the method being tested (the 'Act' part).
+  ReturnValue: The object or value returned by the target method.
+  StateChangingObject: The object whose state is modified by the 'Act'.
+  TestType: Whether this is a positive test (expecting success) or negative test (expecting failure/exception).
 Steps:
-  - Description: "Identify the primary 'Act' of the test, which is the method call that changes state or produces a result."
-    Action: "IdentifyAction"
+  - Description: Identify the primary 'Act' of the test, which is the method call that changes state or produces a result.
+    Action: IdentifyAction
     Parameters:
-      SourcePattern: "Find the main method invocation that is not part of the setup."
+      SourcePattern: Find the main method invocation that is not part of the setup.
   
-  - Description: "Determine if this is a positive or negative test based on method name, context, and expected behavior."
-    Action: "AnalyzeTestType"
+  - Description: Determine if this is a positive or negative test based on method name, context, and expected behavior.
+    Action: AnalyzeTestType
     Parameters:
-      PositiveIndicators: "Method names like 'test*', 'should*Work', 'verify*Success', regular business logic calls without error handling"
-      NegativeIndicators: "Method names containing 'Invalid', 'Error', 'Exception', 'Fail', 'Bad', 'Null', 'Empty', existing try-catch blocks"
+      PositiveIndicators: Method names like 'test*', 'should*Work', 'verify*Success', regular business logic calls without error handling
+      NegativeIndicators: Method names containing 'Invalid', 'Error', 'Exception', 'Fail', 'Bad', 'Null', 'Empty', existing try-catch blocks
   
-  - Description: "Add appropriate assertions based on test type. CRITICAL: Most tests are positive tests expecting normal execution without exceptions."
-    Action: "AddAssertion"
+  - Description: CRITICAL - Analyze the execution context and variable scope before adding assertions.
+    Action: AnalyzeExecutionContext
     Parameters:
-      TargetMethod: "The original test method."
+      ContextAnalysis: |
+        Before adding assertions, verify:
+        1. What variables are available in the current scope?
+        2. What objects have been created and are accessible?
+        3. What return values can be captured from method calls?
+        4. What state changes can be observed and verified?
+        5. Are there any required imports for the assertion methods to be used?
+  
+  - Description: Add appropriate assertions based on test type. CRITICAL - Most tests are positive tests expecting normal execution without exceptions.
+    Action: AddAssertion
+    Parameters:
+      TargetMethod: The original test method.
+      CompilationSafety: |
+        MANDATORY REQUIREMENTS for assertion code:
+        1. Ensure all variables used in assertions are properly declared and in scope
+        2. Verify that assertion methods are available (check imports)
+        3. Use appropriate assertion types for the return values and objects available
+        4. Handle any potential null values or uninitialized objects
+        5. Ensure lambda expressions have access to all required variables (final or effectively final)
       PositiveTestPattern: |
         For positive tests (DEFAULT assumption):
         - If method returns void: Use assertDoesNotThrow(() -> methodCall()) to verify no exception
         - If method returns a value: Use assertEquals(expected, actual) or assertNotNull(result)
         - If method changes object state: Use assertTrue(object.isStateChanged()) or assertEquals(expectedState, object.getState())
+        - Always capture return values in appropriately typed variables before assertions
+        - Ensure all objects being tested are not null before calling methods on them
       NegativeTestPattern: |
         For negative tests (ONLY when clearly indicated):
         - Use assertThrows(SpecificExceptionClass.class, () -> methodCall())
+        - Specify the most specific exception type expected
         - Only use this when the test name or context clearly indicates expecting an exception
 
 TestTypeGuidelines: |
@@ -48,28 +69,32 @@ TestTypeGuidelines: |
 
 RequiredImports:
   - "Keep all existing imports from the original test"
-  - "Add appropriate assertion imports based on the assertion type chosen"
+  - "static org.junit.jupiter.api.Assertions.assertDoesNotThrow"
+  - "static org.junit.jupiter.api.Assertions.assertThrows"
+  - "static org.junit.jupiter.api.Assertions.*"
 
 ImportInstructions: |
-  IMPORTANT: When adding assertions, ensure you include any necessary imports.
-  
-  For JUnit 5 (preferred):
-  - static org.junit.jupiter.api.Assertions.assertEquals
-  - static org.junit.jupiter.api.Assertions.assertNotNull
-  - static org.junit.jupiter.api.Assertions.assertTrue
-  - static org.junit.jupiter.api.Assertions.assertDoesNotThrow (for positive tests)
-  - static org.junit.jupiter.api.Assertions.assertThrows (only for negative tests)
-  
-  For JUnit 4 (legacy):
-  - static org.junit.Assert.assertEquals
-  - static org.junit.Assert.assertNotNull
-  - static org.junit.Assert.assertTrue
-  
-  For Hamcrest:
-  - static org.hamcrest.MatcherAssert.assertThat
-  - static org.hamcrest.Matchers.*
-  
-  Include these in the "Refactored Test Case Additional Import Packages" section if not already present.
+  IMPORTANT: Include the appropriate imports based on the assertions you use.
+  For positive tests: static org.junit.jupiter.api.Assertions.assertDoesNotThrow
+  For negative tests: static org.junit.jupiter.api.Assertions.assertThrows
+  For value assertions: static org.junit.jupiter.api.Assertions.assertEquals, assertNotNull, assertTrue, etc.
+
+CompilationSafety: |
+  Ensure the refactored test method:
+  1. Properly declares and initializes all variables used in assertions
+  2. Has access to all required imports for assertion methods
+  3. Uses correct syntax for lambda expressions in assertDoesNotThrow/assertThrows
+  4. Handles any checked exceptions appropriately
+  5. Maintains proper variable scope and accessibility
+  6. Uses appropriate assertion methods for the data types involved
+
+VariableScopeGuidelines: |
+  When adding assertions:
+  - Capture method return values in properly typed variables
+  - Ensure variables used in lambda expressions are final or effectively final
+  - Declare new variables if needed to hold assertion targets
+  - Verify all objects are properly initialized before using them in assertions
+  - Use appropriate null checks when necessary
 
 Example:
   PositiveTestBefore: |
@@ -92,6 +117,30 @@ Example:
             testService.guestInterface();
         });
     }
+  
+  PositiveTestWithReturnValueBefore: |
+    @Test
+    public void testCalculateTotal() {
+        // Arrange
+        Calculator calc = new Calculator();
+        
+        // Act
+        calc.calculate(10, 20);
+    }
+  PositiveTestWithReturnValueAfter: |
+    @Test
+    public void testCalculateTotal() {
+        // Arrange
+        Calculator calc = new Calculator();
+        
+        // Act
+        int result = calc.calculate(10, 20);
+        
+        // Assert
+        assertEquals(30, result);
+        assertTrue(result > 0);
+    }
+  
   NegativeTestBefore: |
     @Test
     public void testInvalidCredentials() {
@@ -114,4 +163,16 @@ Example:
     }
   RequiredImports: |
     static org.junit.jupiter.api.Assertions.assertDoesNotThrow
-    static org.junit.jupiter.api.Assertions.assertThrows 
+    static org.junit.jupiter.api.Assertions.assertThrows
+    static org.junit.jupiter.api.Assertions.assertEquals
+    static org.junit.jupiter.api.Assertions.assertTrue
+
+CRITICAL_OUTPUT_RESTRICTIONS: |
+  - DO NOT output entire test classes
+  - DO NOT include package declarations or imports in the code section
+  - DO NOT include class definitions like "public class TestClass {}"
+  - DO NOT create @Before, @BeforeEach, @After, @AfterEach methods
+  - DO NOT create setUp() or tearDown() methods
+  - ONLY output the refactored test method(s)
+  - Each method should be self-contained with its own Arrange section
+  - ENSURE each method is completely self-contained and compilable 

@@ -1,29 +1,42 @@
 SmellType: Multiple AAA
-Description: A test method contains multiple Arrange-Act-Assert sequences, violating
-  the Single Responsibility Principle for tests. It should be split into multiple,
-  separate test methods.
+Description: A test method contains multiple Arrange-Act-Assert sequences, violating the Single Responsibility Principle for tests. It should be split into multiple, separate test methods.
 Variables:
   OriginalMethodName: The name of the original test method.
-  ScenarioName: A descriptive name for each independent scenario identified within
-    the original method (e.g., 'WithNullInput', 'OnSuccess').
+  ScenarioName: A descriptive name for each independent scenario identified within the original method (e.g., 'WithNullInput', 'OnSuccess').
 Steps:
-- Description: Identify each distinct Arrange-Act-Assert block in the original method.
-  Action: IdentifyBlocks
-  Parameters:
-    SourcePattern: Look for repeating patterns of variable initialization (Arrange),
-      object/method invocations (Act), and assertion calls (Assert). Each pattern
-      is a self-contained logical unit.
-- Description: For each identified AAA block, create a new, independent method annotated
-    with @Test.
-  Action: SplitMethod
-  Parameters:
-    TargetMethod: '{OriginalMethodName}'
-    ExtractedMethodNamePattern: test{OriginalMethodName}_{ScenarioName}
-- Description: Delete the original test method, as it has been fully replaced by the
-    new, more specific test methods.
-  Action: DeleteMethod
-  Parameters:
-    TargetMethod: '{OriginalMethodName}'
+  - Description: Identify each distinct Arrange-Act-Assert block in the original method.
+    Action: IdentifyBlocks
+    Parameters:
+      SourcePattern: Look for repeating patterns of variable initialization (Arrange), object/method invocations (Act), and assertion calls (Assert). Each pattern is a self-contained logical unit.
+      
+  - Description: CRITICAL - Analyze dependency chains between AAA blocks before splitting.
+    Action: AnalyzeDependencies
+    Parameters:
+      DependencyPattern: |
+        For each AAA block, identify:
+        1. What state/objects it requires from previous blocks
+        2. What setup operations from previous blocks are prerequisites
+        3. What context must be preserved for this block to work independently
+        4. Which variables and their values are needed from earlier operations
+        
+  - Description: For each identified AAA block, create a new, independent method annotated with @Test. CRITICAL - Each method MUST include ALL necessary prerequisites.
+    Action: SplitMethod
+    Parameters:
+      TargetMethod: '{OriginalMethodName}'
+      ExtractedMethodNamePattern: test{OriginalMethodName}_{ScenarioName}
+      DependencyPreservation: |
+        MANDATORY REQUIREMENTS for each split method:
+        1. Include ALL setup operations that the original AAA block depended on
+        2. Recreate the same state that existed when this block originally executed
+        3. Ensure all variables used in this block are properly declared and initialized
+        4. Include any prerequisite method calls from earlier blocks
+        5. Preserve resource initialization (connections, files, configurations, etc.)
+        6. Maintain the same execution context (static vs instance, thread context, etc.)
+        
+  - Description: Delete the original test method, as it has been fully replaced by the new, more specific test methods.
+    Action: DeleteMethod
+    Parameters:
+      TargetMethod: '{OriginalMethodName}'
 
 RequiredImports:
   - "Keep all existing imports from the original test"
@@ -33,6 +46,21 @@ ImportInstructions: |
   IMPORTANT: When splitting methods, ensure all necessary imports are preserved.
   If you use any new assertion libraries or utilities, include their imports in the 
   "Refactored Test Case Additional Import Packages" section.
+  
+  CRITICAL DEPENDENCY PRESERVATION:
+  - ALWAYS analyze the execution flow: what happens in sequence A → B → C
+  - When creating a test for B, include all necessary setup from A
+  - When creating a test for C, include all necessary setup from A and B
+  - Better to duplicate setup code than to have failing tests due to missing prerequisites
+  - Each test method must be able to run independently without relying on external state
+
+CompilationSafety: |
+  Each split test method MUST:
+  1. Declare all variables it uses within its own scope
+  2. Initialize all objects it needs within its own Arrange section
+  3. Perform all prerequisite operations needed for its specific test scenario
+  4. Be completely independent and runnable without any external setup
+  5. Have access to all required dependencies and configurations
 
 Example:
   Before: |
@@ -46,35 +74,95 @@ Example:
         // Assert 1
         assertTrue(isConnected);
 
-        // Arrange 2
+        // Arrange 2 (depends on connection from previous block!)
         String data = "hello";
-        // Act 2
+        // Act 2 (requires server to be connected!)
         boolean dataSent = server.send(data);
         // Assert 2
         assertTrue(dataSent);
+        
+        // Arrange 3 (depends on sent data!)
+        // Act 3 (requires data to have been sent!)
+        String response = server.getLastResponse();
+        // Assert 3
+        assertNotNull(response);
     }
   After: |
     @Test
-    public void testServerIsConnected() {
+    public void testServerConnection() {
         // Arrange
         Server server = new Server();
-        server.connect();
+        
         // Act
+        server.connect();
         boolean isConnected = server.isConnected();
+        
         // Assert
         assertTrue(isConnected);
     }
 
     @Test
     public void testSendDataSuccessfully() {
-        // Arrange
+        // Arrange (MUST include connection prerequisite!)
         Server server = new Server();
-        server.connect();
+        server.connect();  // ← CRITICAL: Include prerequisite from original flow
         String data = "hello";
+        
         // Act
         boolean dataSent = server.send(data);
+        
         // Assert
         assertTrue(dataSent);
     }
+    
+    @Test
+    public void testServerResponseRetrieval() {
+        // Arrange (MUST include ALL prerequisites!)
+        Server server = new Server();
+        server.connect();           // ← CRITICAL: Include connection prerequisite
+        String data = "hello";
+        server.send(data);          // ← CRITICAL: Include data sending prerequisite
+        
+        // Act
+        String response = server.getLastResponse();
+        
+        // Assert
+        assertNotNull(response);
+    }
   RequiredImports: |
-    (Preserve all existing imports from the original test class) 
+    (Preserve all existing imports from the original test class)
+
+MethodNamingGuidelines: |
+  Use descriptive, specific names that clearly indicate what each test verifies:
+  - Focus on the specific behavior being tested
+  - Avoid generic suffixes like "1", "2", "3"
+  - Use domain-specific terminology
+  - Examples of GOOD names:
+    * testServerConnection
+    * testDataTransmissionAfterConnection
+    * testResponseRetrievalAfterDataSent
+  - Examples of BAD names:
+    * testServerInteractions1
+    * testServerInteractions2
+    * testMethod_Part1
+
+DependencyAnalysisChecklist: |
+  Before generating each split method, verify:
+  ✓ What objects does this test need? Are they all created/initialized?
+  ✓ What method calls must happen before this test's main action?
+  ✓ What state must exist for this test to succeed?
+  ✓ Are there any side effects from previous operations that this test relies on?
+  ✓ Does this test require any specific configuration or setup?
+  ✓ Are all variables and parameters properly defined within this method's scope?
+
+CRITICAL_OUTPUT_RESTRICTIONS: |
+  - DO NOT create any @Before, @BeforeEach, @After, @AfterEach methods
+  - DO NOT create setUp() or tearDown() methods
+  - DO NOT include any shared setup code outside of individual test methods
+  - Each test method must be completely self-contained with its own Arrange section
+  - If common setup is needed, duplicate it in each test method rather than extracting it
+  - DO NOT output entire test classes
+  - DO NOT include package declarations or imports in the code section
+  - DO NOT include class definitions like "public class TestClass {}"
+  - ONLY output the refactored test method(s)
+  - ENSURE each method is completely self-contained and compilable 
