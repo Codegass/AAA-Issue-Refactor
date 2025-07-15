@@ -136,15 +136,137 @@ class CodeValidator:
                     break
             if insertion_point == -1: insertion_point = 0
 
-        # Add new imports that don't already exist
+        # Clean and validate imports
+        valid_imports = []
+        for imp in new_imports:
+            # Clean and validate each import
+            cleaned_import = self._clean_and_validate_import(imp)
+            if cleaned_import:  # Only add if validation passes
+                # Check if already exists
+                if not self._is_import_already_satisfied(cleaned_import, existing_imports):
+                    valid_imports.append(cleaned_import)
+                else:
+                    logger.debug(f"Import already exists: {cleaned_import}")
+            else:
+                logger.debug(f"Skipping invalid import: {imp}")
+        
+        if not valid_imports:
+            logger.debug("No valid new imports to add")
+            return content, True
+
+        # Add new imports that don't already exist, with proper validation
         added_count = 0
-        for imp in reversed(new_imports):
+        for imp in reversed(valid_imports):
             full_import_statement = f"import {imp};"
-            if full_import_statement not in existing_imports:
+            
+            # Check if this import already exists
+            if not self._is_import_already_satisfied(imp, existing_imports):
                 lines.insert(insertion_point, full_import_statement)
+                logger.debug(f"Added import: {full_import_statement}")
                 added_count += 1
+            else:
+                logger.debug(f"Import already exists: {imp}")
+        
+        if added_count > 0:
+            logger.info(f"Added {added_count} new imports")
         
         return '\n'.join(lines), True
+    
+    def _clean_and_validate_import(self, import_statement: str) -> Optional[str]:
+        """Clean and validate an import statement, returning None if invalid."""
+        if not import_statement:
+            return None
+        
+        # Remove 'import ' prefix and ';' suffix if present
+        cleaned = import_statement.strip()
+        if cleaned.startswith('import '):
+            cleaned = cleaned[7:].strip()
+        if cleaned.endswith(';'):
+            cleaned = cleaned[:-1].strip()
+        
+        # Skip empty or placeholder imports
+        if not cleaned or cleaned.lower() in ['none', 'n/a', 'empty']:
+            return None
+        
+        # Validate basic import format
+        # Skip imports with invalid characters
+        if any(invalid in cleaned for invalid in ['(', ')', '[', ']', '{', '}', '=', '"', "'"]):
+            logger.debug(f"Skipping import with invalid characters: {cleaned}")
+            return None
+        
+        # Fix method-level imports to static imports
+        if any(method in cleaned for method in ['.assertEquals', '.assertTrue', '.assertFalse', '.assertNotNull', '.assertNull']):
+            if 'org.junit.Assert.' in cleaned:
+                method_name = cleaned.split('.')[-1]
+                cleaned = f'static org.junit.Assert.{method_name}'
+            elif 'junit.framework.TestCase.' in cleaned:
+                method_name = cleaned.split('.')[-1]
+                cleaned = f'static org.junit.Assert.{method_name}'
+            else:
+                # Skip invalid method-level imports
+                logger.debug(f"Skipping invalid method-level import: {cleaned}")
+                return None
+        
+        # Check for invalid import patterns
+        if (cleaned.count('.') > 0 and 
+            not cleaned.startswith('static ') and
+            any(pattern in cleaned for pattern in ['.class', '.getName', '.getCanonicalName']) and
+            not cleaned.endswith('.class') and
+            not cleaned.endswith('.getName') and
+            not cleaned.endswith('.getCanonicalName')):
+            logger.debug(f"Skipping invalid import pattern: {cleaned}")
+            return None
+        
+        # Validate import format
+        if cleaned.startswith('static '):
+            # Static imports should have at least one dot after 'static '
+            if '.' not in cleaned[7:]:
+                logger.debug(f"Skipping invalid static import: {cleaned}")
+                return None
+        elif '.' not in cleaned:
+            # Non-static imports should have at least one dot
+            logger.debug(f"Skipping invalid import (no package): {cleaned}")
+            return None
+        
+        # Check for common Java packages or known libraries
+        if (cleaned.startswith('java.') or cleaned.startswith('javax.') or 
+            cleaned.startswith('org.') or cleaned.startswith('com.') or
+            cleaned.startswith('static java.') or cleaned.startswith('static javax.') or
+            cleaned.startswith('static org.') or cleaned.startswith('static com.')):
+            return cleaned
+        
+        # For other packages, do a basic validation
+        if '.' in cleaned and not any(invalid in cleaned for invalid in [' ', '\t', '\n', '\r']):
+            return cleaned
+        
+        logger.debug(f"Skipping unrecognized import: {cleaned}")
+        return None
+    
+    def _is_import_already_satisfied(self, import_statement: str, existing_imports: set) -> bool:
+        """Check if an import is already satisfied by existing imports (including wildcards)."""
+        # Direct check
+        if import_statement in existing_imports:
+            return True
+        
+        # Check for wildcard imports
+        if import_statement.startswith('import static '):
+            # Extract class name from static import
+            import_content = import_statement.replace('import static ', '').replace(';', '')
+            if '.' in import_content:
+                class_name = '.'.join(import_content.split('.')[:-1])
+                wildcard_import = f"import static {class_name}.*;"
+                if wildcard_import in existing_imports:
+                    return True
+        else:
+            # Regular import - check for package wildcard
+            import_content = import_statement.replace('import ', '').replace(';', '')
+            if '.' in import_content:
+                package_name = '.'.join(import_content.split('.')[:-1])
+                wildcard_import = f"import {package_name}.*;"
+                if wildcard_import in existing_imports:
+                    return True
+        
+        return False
     
     def _find_method_span(self, lines: List[str], method_name: str) -> Tuple[int, int]:
         """Finds the start and end line numbers of a method, including its annotations."""

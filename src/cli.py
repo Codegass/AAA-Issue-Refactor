@@ -450,71 +450,122 @@ def execution_test_phase(java_project_path: Path, output_path: Path,
                 imports_str = row[f'{prefix}_refactored_test_case_imports']
                 raw_imports = [imp.strip() for imp in imports_str.split(',') if imp.strip()] if imports_str else []
                 
-                # Enhanced import processing
+                # Use SmartImportManager for all import processing
+                from .import_manager import SmartImportManager
+                import_manager = SmartImportManager(java_project_path)
+                
+                # Read file content once for all operations
+                original_content = test_path.read_text(encoding='utf-8')
+                
+                # Use SmartImportManager to normalize and validate imports
                 additional_imports = []
                 for imp in raw_imports:
-                    cleaned_imp = imp.strip()
-                    
-                    # Skip empty imports
-                    if not cleaned_imp or cleaned_imp.lower() in ['none', 'n/a', 'empty']:
-                        continue
-                    
-                    # Remove any 'import ' prefix and ';' suffix for consistency
-                    if cleaned_imp.startswith('import '):
-                        cleaned_imp = cleaned_imp[7:]  # Remove 'import '
-                    if cleaned_imp.endswith(';'):
-                        cleaned_imp = cleaned_imp[:-1]  # Remove ';'
-                    
-                    # Skip if already properly formatted as static import
-                    if cleaned_imp.startswith('static '):
-                        additional_imports.append(cleaned_imp)
-                    # Check if it's a JUnit assertion that should be a static import
-                    elif ('org.junit.jupiter.api.Assertions.' in cleaned_imp and 
-                          any(assertion in cleaned_imp for assertion in ['assert', 'fail'])):
-                        # Convert to static import format
-                        additional_imports.append(f"static {cleaned_imp}")
-                    elif ('org.junit.Assert.' in cleaned_imp and 
-                          any(assertion in cleaned_imp for assertion in ['assert', 'fail'])):
-                        # Convert JUnit 4 to static import format
-                        additional_imports.append(f"static {cleaned_imp}")
-                    elif ('org.hamcrest.' in cleaned_imp and 
-                          any(matcher in cleaned_imp for matcher in ['Matchers.', 'MatcherAssert.', 'CoreMatchers.'])):
-                        # Convert Hamcrest to static import format
-                        additional_imports.append(f"static {cleaned_imp}")
-                    elif cleaned_imp == 'org.hamcrest.Matchers.*':
-                        # Handle wildcard Hamcrest import
-                        additional_imports.append(f"static {cleaned_imp}")
-                    else:
-                        # Keep as regular import
-                        additional_imports.append(cleaned_imp)
+                    normalized = import_manager._normalize_import_format(imp, original_content)
+                    if normalized:  # Only add if normalization succeeded (filters out comments, etc.)
+                        additional_imports.append(normalized)
                 
-                # For DSL strategy, use SmartImportManager to detect missing imports
+                # For DSL strategy, also detect missing imports automatically
                 if strategy == 'dsl':
-                    from .import_manager import SmartImportManager
-                    import_manager = SmartImportManager(java_project_path)
-                    
                     # Analyze the refactored code for missing imports
-                    existing_imports = set(additional_imports)
+                    existing_imports = set()
+                    # Convert additional_imports to proper format for checking
+                    for imp in additional_imports:
+                        if imp.startswith('static '):
+                            existing_imports.add(f"import {imp};")
+                        else:
+                            existing_imports.add(f"import {imp};")
+                    
                     requirements = import_manager.analyze_code_requirements(row[code_col], existing_imports)
                     
                     # Add any missing imports detected by the smart manager
                     for req in requirements:
                         import_stmt = req.import_statement
-                        # Clean the import statement
+                        # Ensure proper format for additional_imports list
                         if import_stmt.startswith('import '):
-                            import_stmt = import_stmt[7:]
+                            import_stmt = import_stmt[7:]  # Remove 'import '
                         if import_stmt.endswith(';'):
-                            import_stmt = import_stmt[:-1]
+                            import_stmt = import_stmt[:-1]  # Remove ';'
                             
-                        if import_stmt not in existing_imports:
+                        # Only add if not already present
+                        if import_stmt not in additional_imports:
                             additional_imports.append(import_stmt)
                             logger.info(f"  📦 Auto-detected missing import: {import_stmt} ({req.reason})")
                 
-                success, modified_content, _ = validator.integrate_refactored_method(
+                # CRITICAL: Analyze all imports to determine required dependencies BEFORE integration
+                if additional_imports:
+                    logger.info(f"  🔍 Analyzing {len(additional_imports)} imports for dependency requirements...")
+                    
+                    # Use SmartImportManager to analyze third-party dependencies
+                    third_party_deps_needed = import_manager.analyze_third_party_dependencies(additional_imports)
+                    
+                    # Also analyze production imports for potential issues
+                    production_analysis = import_manager.analyze_production_imports(additional_imports, original_content)
+                    if production_analysis['recommendations']:
+                        for recommendation in production_analysis['recommendations']:
+                            logger.warning(f"  ⚠ Production import analysis: {recommendation}")
+                    
+                    # Add required dependencies before proceeding
+                    for dep in third_party_deps_needed:
+                        logger.info(f"  📚 Detected {dep['type'].upper()} usage, ensuring dependency is available...")
+                        logger.debug(f"    Required imports: {', '.join(dep['imports'])}")
+                        
+                        if dep['type'] == 'hamcrest':
+                            hamcrest_success, hamcrest_message = validator.ensure_hamcrest_dependency()
+                            if hamcrest_success:
+                                logger.info(f"  ✓ {dep['type'].upper()} dependency ready: {hamcrest_message}")
+                            else:
+                                logger.error(f"  ❌ {dep['type'].upper()} dependency failed: {hamcrest_message}")
+                                df.loc[df.index == row.name, result_col] = "dependency_failed"
+                                execution_summary['test_failures'].append({
+                                    'strategy': strategy,
+                                    'test': test_full_name,
+                                    'reason': f'{dep["type"].title()} dependency failed: {hamcrest_message}'
+                                })
+                                continue  # Skip this test case
+                        # TODO: Add handling for other dependency types (mockito, etc.)
+                        else:
+                            logger.warning(f"  ⚠ Unknown dependency type '{dep['type']}', skipping dependency check")
+                
+                # Use SmartImportManager for import integration
+                
+                # Add imports using SmartImportManager
+                if additional_imports:
+                    modified_content, import_success = import_manager.add_missing_imports(original_content, additional_imports)
+                    if not import_success:
+                        logger.warning(f"  ⚠ Import integration had issues for {row['test_method_name']}")
+                else:
+                    modified_content = original_content
+                
+                # Now integrate the code using the validator
+                success, final_content, _ = validator.integrate_refactored_method(
                     test_path, target_method_for_removal, row[code_col], strategy,
-                    additional_imports, is_one_to_many,
+                    [], is_one_to_many,  # Pass empty imports since we already handled them
                     debug_mode=debug_mode
                 )
+                
+                if success:
+                    # Use our content with proper imports
+                    lines = final_content.split('\n')
+                    original_lines = modified_content.split('\n')
+                    
+                    # Find the imports section in both contents
+                    final_import_end = -1
+                    original_import_end = -1
+                    
+                    for i, line in enumerate(lines):
+                        if line.strip().startswith('import '):
+                            final_import_end = i
+                    
+                    for i, line in enumerate(original_lines):
+                        if line.strip().startswith('import '):
+                            original_import_end = i
+                    
+                    # Replace the imports section in final_content with our properly managed imports
+                    if final_import_end >= 0 and original_import_end >= 0:
+                        # Keep the package and imports from our managed content
+                        final_content = '\n'.join(original_lines[:original_import_end + 1] + lines[final_import_end + 1:])
+                    
+                    modified_content = final_content
                 
                 if not success:
                     logger.warning(f"  ✗ Code integration failed for {row['test_method_name']}.")
@@ -810,7 +861,11 @@ def show_refactored_phase(java_project_path: Path, output_path: Path, debug_mode
             # Extract existing method names to avoid conflicts
             existing_methods = set(_extract_method_names_from_code(original_content))
             
+            # Collect all imports needed for this file
+            all_file_imports = []
+            
             # Process each test method in this file
+            method_refactorings = []  # Store refactorings for each method
             for _, row in group_df.iterrows():
                 method_name = row['test_method_name']
                 logger.info(f"  Processing method: {method_name}")
@@ -839,21 +894,62 @@ def show_refactored_phase(java_project_path: Path, output_path: Path, debug_mode
                             'issue_type': row['issue_type']
                         })
                         
+                        # Collect imports for this file
+                        all_file_imports.extend(additional_imports)
+                        
                         # Update existing methods set to track new methods
                         new_methods = _extract_method_names_from_code(refactored_code)
                         existing_methods.update(new_methods)
                 
-                if not refactorings:
+                if refactorings:
+                    method_refactorings.append({
+                        'method_name': method_name,
+                        'refactorings': refactorings
+                    })
+                else:
                     logger.info(f"    No successful refactorings found for {method_name}")
-                    continue
+            
+            # Add all imports for this file using SmartImportManager (once)
+            if all_file_imports:
+                # CRITICAL: Analyze imports for dependency requirements BEFORE adding them
+                logger.info(f"🔍 Analyzing {len(all_file_imports)} imports for dependency requirements...")
                 
-                # Add imports for all refactorings
-                all_imports = []
-                for ref in refactorings:
-                    all_imports.extend(ref['imports'])
+                # Use SmartImportManager for dependency analysis
+                from .import_manager import SmartImportManager
+                import_manager = SmartImportManager(java_project_path)
+                third_party_deps_needed = import_manager.analyze_third_party_dependencies(all_file_imports)
                 
-                if all_imports:
-                    modified_content, _ = validator._add_imports(modified_content, all_imports)
+                # Add required dependencies before proceeding
+                dependency_success = True
+                for dep in third_party_deps_needed:
+                    logger.info(f"📚 Detected {dep['type'].upper()} usage, ensuring dependency is available...")
+                    logger.debug(f"  Required imports: {', '.join(dep['imports'])}")
+                    
+                    if dep['type'] == 'hamcrest':
+                        hamcrest_success, hamcrest_message = validator.ensure_hamcrest_dependency()
+                        if hamcrest_success:
+                            logger.info(f"✓ {dep['type'].upper()} dependency ready: {hamcrest_message}")
+                        else:
+                            logger.error(f"❌ {dep['type'].upper()} dependency failed: {hamcrest_message}")
+                            dependency_success = False
+                            break
+                    # TODO: Add handling for other dependency types (mockito, etc.)
+                    else:
+                        logger.warning(f"⚠ Unknown dependency type '{dep['type']}', skipping dependency check")
+                
+                if dependency_success:
+                    # Use SmartImportManager for intelligent import handling
+                    from .import_manager import SmartImportManager
+                    import_manager = SmartImportManager(java_project_path)
+                    modified_content, _ = import_manager.add_missing_imports(modified_content, all_file_imports)
+                else:
+                    logger.error(f"❌ Dependency setup failed for file {test_file_path.name}, skipping import addition")
+                    # Continue without adding imports that require missing dependencies
+            
+            # Now insert the refactored methods
+            for method_info in method_refactorings:
+                method_name = method_info['method_name']
+                refactorings = method_info['refactorings']
                 
                 # NEW LOGIC: Insert refactored methods after the original method (similar to execution phase)
                 lines = modified_content.split('\n')

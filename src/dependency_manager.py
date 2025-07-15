@@ -2,7 +2,7 @@
 
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 import logging
 import re
 
@@ -29,6 +29,7 @@ class DependencyManager:
         self.project_path = project_path
         self.build_system = self._detect_build_system()
         self.backup_files: List[Path] = []
+        self.existing_hamcrest_info = None  # Will store detected Hamcrest info
         
     def _detect_build_system(self) -> str:
         """Detect the build system used."""
@@ -39,8 +40,171 @@ class DependencyManager:
         else:
             return "unknown"
     
+    def _detect_existing_hamcrest_dependency(self) -> Dict[str, Any]:
+        """
+        Detect existing Hamcrest dependencies in the project.
+        Returns info about existing Hamcrest versions and formats.
+        """
+        hamcrest_info = {
+            "exists": False,
+            "version": None,
+            "format": None,  # "hamcrest" (2.x) or "hamcrest-all" (1.x)
+            "compatible": False,
+            "files_checked": []
+        }
+        
+        if self.build_system == "gradle":
+            return self._detect_hamcrest_gradle(hamcrest_info)
+        elif self.build_system == "maven":
+            return self._detect_hamcrest_maven(hamcrest_info)
+        
+        return hamcrest_info
+    
+    def _detect_hamcrest_gradle(self, hamcrest_info: Dict[str, Any]) -> Dict[str, Any]:
+        """Detect Hamcrest in Gradle projects."""
+        # Check main build.gradle
+        main_build_gradle = self.project_path / "build.gradle"
+        if main_build_gradle.exists():
+            hamcrest_info["files_checked"].append(str(main_build_gradle))
+            content = main_build_gradle.read_text(encoding='utf-8')
+            self._parse_gradle_hamcrest(content, hamcrest_info)
+        
+        # Check dependency version files
+        dep_version_files = [
+            self.project_path / "gradle" / "dependency-versions.gradle",
+            self.project_path / "gradle.properties"
+        ]
+        
+        for dep_file in dep_version_files:
+            if dep_file.exists():
+                hamcrest_info["files_checked"].append(str(dep_file))
+                content = dep_file.read_text(encoding='utf-8')
+                # Look for hamcrestVersion definition
+                version_match = re.search(r'hamcrestVersion\s*=\s*["\']([^"\']+)["\']', content)
+                if version_match:
+                    hamcrest_info["version"] = version_match.group(1)
+        
+        # Check if all subproject build files
+        for gradle_file in self.project_path.glob("**/build.gradle*"):
+            if "build" in str(gradle_file) or ".gradle" in str(gradle_file).replace(str(gradle_file.name), ""):
+                continue  # Skip build output directories
+            hamcrest_info["files_checked"].append(str(gradle_file))
+            content = gradle_file.read_text(encoding='utf-8')
+            self._parse_gradle_hamcrest(content, hamcrest_info)
+        
+        return hamcrest_info
+    
+    def _parse_gradle_hamcrest(self, content: str, hamcrest_info: Dict[str, Any]):
+        """Parse Gradle build file content for Hamcrest dependencies."""
+        # Look for various Hamcrest dependency patterns
+        hamcrest_patterns = [
+            (r'["\']org\.hamcrest:hamcrest:([^"\']+)["\']', "hamcrest"),
+            (r'["\']org\.hamcrest:hamcrest-all:([^"\']+)["\']', "hamcrest-all"),
+            (r'["\']org\.hamcrest:hamcrest-core:([^"\']+)["\']', "hamcrest-core"),
+            (r'["\']org\.hamcrest:hamcrest-library:([^"\']+)["\']', "hamcrest-library"),
+        ]
+        
+        for pattern, format_type in hamcrest_patterns:
+            matches = re.findall(pattern, content)
+            if matches:
+                hamcrest_info["exists"] = True
+                hamcrest_info["format"] = format_type
+                # Use version from dependency if not found in version file
+                if not hamcrest_info["version"] and matches:
+                    version = matches[0]
+                    # Handle variable references like $hamcrestVersion
+                    if version.startswith('$'):
+                        continue  # Will be resolved from version file
+                    hamcrest_info["version"] = version
+        
+        # Check for variable usage like $hamcrestVersion
+        if re.search(r'\$hamcrestVersion', content) and not hamcrest_info["exists"]:
+            hamcrest_info["exists"] = True  # Mark as existing if variable is used
+    
+    def _detect_hamcrest_maven(self, hamcrest_info: Dict[str, Any]) -> Dict[str, Any]:
+        """Detect Hamcrest in Maven projects."""
+        # Find all pom.xml files
+        pom_files = list(self.project_path.glob("**/pom.xml"))
+        
+        for pom_file in pom_files:
+            if '.backup' in str(pom_file) or 'backup' in str(pom_file).lower():
+                continue
+            
+            hamcrest_info["files_checked"].append(str(pom_file))
+            try:
+                content = pom_file.read_text(encoding='utf-8')
+                self._parse_maven_hamcrest(content, hamcrest_info)
+            except Exception as e:
+                logger.debug(f"Error reading {pom_file}: {e}")
+                continue
+        
+        return hamcrest_info
+    
+    def _parse_maven_hamcrest(self, content: str, hamcrest_info: Dict[str, Any]):
+        """Parse Maven POM content for Hamcrest dependencies."""
+        # Look for Hamcrest dependencies in XML
+        hamcrest_patterns = [
+            (r'<groupId>org\.hamcrest</groupId>\s*<artifactId>hamcrest</artifactId>\s*<version>([^<]+)</version>', "hamcrest"),
+            (r'<groupId>org\.hamcrest</groupId>\s*<artifactId>hamcrest-all</artifactId>\s*<version>([^<]+)</version>', "hamcrest-all"),
+            (r'<groupId>org\.hamcrest</groupId>\s*<artifactId>hamcrest-core</artifactId>\s*<version>([^<]+)</version>', "hamcrest-core"),
+        ]
+        
+        for pattern, format_type in hamcrest_patterns:
+            matches = re.findall(pattern, content, re.DOTALL)
+            if matches:
+                hamcrest_info["exists"] = True
+                hamcrest_info["format"] = format_type
+                version = matches[0].strip()
+                if not version.startswith('${') and not hamcrest_info["version"]:
+                    hamcrest_info["version"] = version
+    
+    def _is_hamcrest_compatible(self, hamcrest_info: Dict[str, Any]) -> bool:
+        """
+        Check if existing Hamcrest is compatible with our needs.
+        """
+        if not hamcrest_info["exists"]:
+            return False
+        
+        version = hamcrest_info["version"]
+        format_type = hamcrest_info["format"]
+        
+        if not version:
+            # If we can't determine version, assume it's compatible
+            return True
+        
+        try:
+            # Parse version number
+            version_parts = version.split('.')
+            major = int(version_parts[0])
+            minor = int(version_parts[1]) if len(version_parts) > 1 else 0
+            
+            # Hamcrest 1.3+ or 2.x are generally compatible for basic usage
+            if major >= 2:
+                return True
+            elif major == 1 and minor >= 3:
+                return True
+            else:
+                return False
+                
+        except (ValueError, IndexError):
+            # If we can't parse version, assume compatible
+            logger.debug(f"Could not parse Hamcrest version: {version}")
+            return True
+    
     def add_hamcrest_dependency(self) -> Tuple[bool, str]:
         """Add Hamcrest dependency to the project and ALL submodules."""
+        # First, detect existing Hamcrest dependencies
+        self.existing_hamcrest_info = self._detect_existing_hamcrest_dependency()
+        
+        logger.info(f"Hamcrest detection result: {self.existing_hamcrest_info}")
+        
+        # Check if existing Hamcrest is compatible
+        if self.existing_hamcrest_info["exists"]:
+            if self._is_hamcrest_compatible(self.existing_hamcrest_info):
+                return True, f"Compatible Hamcrest already exists: {self.existing_hamcrest_info['format']}:{self.existing_hamcrest_info['version']}"
+            else:
+                logger.warning(f"Incompatible Hamcrest version found: {self.existing_hamcrest_info['version']}")
+        
         if self.build_system == "maven":
             return self._add_hamcrest_maven_all_modules()
         elif self.build_system == "gradle":
@@ -120,9 +284,39 @@ class DependencyManager:
     
     def _add_hamcrest_gradle_all_modules(self) -> Tuple[bool, str]:
         """Add Hamcrest dependency to all Gradle build files found in the project."""
+        # If compatible Hamcrest already exists, don't add new dependencies
+        if (self.existing_hamcrest_info and 
+            self.existing_hamcrest_info["exists"] and 
+            self._is_hamcrest_compatible(self.existing_hamcrest_info)):
+            return True, f"Using existing compatible Hamcrest: {self.existing_hamcrest_info['format']}:{self.existing_hamcrest_info['version']}"
+        
         # Find all build.gradle and build.gradle.kts files
-        gradle_files = list(self.project_path.glob("**/build.gradle")) + \
-                      list(self.project_path.glob("**/build.gradle.kts"))
+        gradle_files = []
+        
+        # Add main build.gradle if it exists
+        main_gradle = self.project_path / "build.gradle"
+        if main_gradle.exists():
+            gradle_files.append(main_gradle)
+        
+        # Add main build.gradle.kts if it exists
+        main_gradle_kts = self.project_path / "build.gradle.kts"
+        if main_gradle_kts.exists():
+            gradle_files.append(main_gradle_kts)
+        
+        # Find subproject build files (but skip build output directories)
+        for gradle_file in self.project_path.glob("**/build.gradle"):
+            if ("build/" in str(gradle_file) or 
+                "/.gradle/" in str(gradle_file) or
+                gradle_file == main_gradle):
+                continue
+            gradle_files.append(gradle_file)
+            
+        for gradle_file in self.project_path.glob("**/build.gradle.kts"):
+            if ("build/" in str(gradle_file) or 
+                "/.gradle/" in str(gradle_file) or
+                gradle_file == main_gradle_kts):
+                continue
+            gradle_files.append(gradle_file)
         
         if not gradle_files:
             return False, "No build.gradle files found"
@@ -132,6 +326,9 @@ class DependencyManager:
         modified_files = []
         already_present = []
         failed_files = []
+        
+        # Special handling for projects with existing Hamcrest
+        hamcrest_upgrade_strategy = self._determine_hamcrest_upgrade_strategy()
         
         for gradle_file in gradle_files:
             try:
@@ -153,8 +350,13 @@ class DependencyManager:
                     already_present.append(str(relative_path))
                     continue
                 
-                # Try to add hamcrest
-                modified_content = self._add_to_gradle_dependencies(content)
+                # Try to add hamcrest based on the upgrade strategy
+                if hamcrest_upgrade_strategy == "skip":
+                    logger.debug(f"  Skipping {relative_path} - compatible Hamcrest exists")
+                    already_present.append(str(relative_path))
+                    continue
+                
+                modified_content = self._add_to_gradle_dependencies(content, hamcrest_upgrade_strategy)
                 
                 if modified_content != content:
                     gradle_file.write_text(modified_content, encoding='utf-8')
@@ -182,6 +384,31 @@ class DependencyManager:
             return True, "; ".join(summary_parts)
         else:
             return False, f"Failed to add Hamcrest to any modules: {'; '.join(summary_parts)}"
+    
+    def _determine_hamcrest_upgrade_strategy(self) -> str:
+        """
+        Determine the strategy for adding Hamcrest based on existing dependencies.
+        
+        Returns:
+            "skip" - Don't add, existing is compatible
+            "upgrade" - Add modern Hamcrest alongside old
+            "add" - Add new Hamcrest dependency
+        """
+        if not self.existing_hamcrest_info or not self.existing_hamcrest_info["exists"]:
+            return "add"
+        
+        if self._is_hamcrest_compatible(self.existing_hamcrest_info):
+            # If existing Hamcrest is compatible but old format, we might want to add modern imports
+            if self.existing_hamcrest_info["format"] == "hamcrest-all":
+                version = self.existing_hamcrest_info["version"]
+                if version and version.startswith("1."):
+                    # For Hamcrest 1.x with hamcrest-all, don't add modern version
+                    # Instead, we should adapt our import strategy to use 1.x APIs
+                    logger.info(f"Found Hamcrest 1.x (hamcrest-all:{version}), will adapt import strategy")
+                    return "skip"
+            return "skip"
+        
+        return "upgrade"
     
     def _is_hamcrest_present_maven(self, content: str) -> bool:
         """Check if modern Hamcrest dependency is already present in Maven POM."""
@@ -322,35 +549,31 @@ class DependencyManager:
         
         return '\n'.join(lines)
     
-    def _add_to_gradle_dependencies(self, content: str) -> str:
+    def _add_to_gradle_dependencies(self, content: str, upgrade_strategy: str = "add") -> str:
         """Add Hamcrest to Gradle dependencies block."""
         lines = content.split('\n')
         
-        # Check if there's already hamcrest-all or old hamcrest version and upgrade it
-        hamcrest_upgraded = False
-        for i, line in enumerate(lines):
-            if ('hamcrest' in line.lower() and 
-                ('testCompile' in line or 'testImplementation' in line or 'testApi' in line) and
-                not 'AAA-Issue-Refactor' in line):
-                
-                # Found existing hamcrest dependency
-                old_line = line
-                # Extract indentation
-                indent_match = re.match(r'^(\s*)', line)
-                indent = indent_match.group(1) if indent_match else "    "
-                
-                # Comment out old line and add new one
-                lines[i] = f'{indent}// {old_line.strip()}  // Commented out by AAA-Issue-Refactor'
-                new_line = f'{indent}testImplementation "org.hamcrest:hamcrest:2.2"  // Added by AAA-Issue-Refactor'
-                lines.insert(i + 1, new_line)
-                hamcrest_upgraded = True
-                logger.debug(f"Upgraded hamcrest dependency to 2.2")
-                break
+        # If upgrading, add modern Hamcrest alongside old
+        if upgrade_strategy == "upgrade":
+            for i, line in enumerate(lines):
+                if ('hamcrest' in line.lower() and 
+                    ('testCompile' in line or 'testImplementation' in line or 'testApi' in line) and
+                    not 'AAA-Issue-Refactor' in line):
+                    
+                    # Found existing hamcrest dependency
+                    old_line = line
+                    # Extract indentation
+                    indent_match = re.match(r'^(\s*)', line)
+                    indent = indent_match.group(1) if indent_match else "    "
+                    
+                    # Comment out old line and add new one
+                    lines[i] = f'{indent}// {old_line.strip()}  // Commented out by AAA-Issue-Refactor'
+                    new_line = f'{indent}testImplementation "org.hamcrest:hamcrest:2.2"  // Added by AAA-Issue-Refactor'
+                    lines.insert(i + 1, new_line)
+                    logger.debug(f"Upgraded hamcrest dependency to 2.2")
+                    return '\n'.join(lines)
         
-        if hamcrest_upgraded:
-            return '\n'.join(lines)
-        
-        # If no existing hamcrest found, add new dependency
+        # For "add" strategy or if no existing hamcrest found, add new dependency
         # Find dependencies block
         in_dependencies = False
         brace_count = 0
