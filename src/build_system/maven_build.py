@@ -14,6 +14,27 @@ logger = logging.getLogger('aif')
 class MavenBuildSystem(BuildSystem):
     """Maven build system implementation."""
     
+    def _get_security_skip_params(self) -> List[str]:
+        """Get comprehensive list of security and quality check skip parameters."""
+        return [
+            "-Dossindex.skip=true",           # Skip ossindex security audit (CRITICAL for CVE issues)
+            "-Drat.skip=true",                # Skip Apache RAT license check
+            "-Dcheckstyle.skip=true",         # Skip Checkstyle validation
+            "-Dmaven.javadoc.skip=true",      # Skip JavaDoc generation
+            "-Dpmd.skip=true",                # Skip PMD
+            "-Dspotbugs.skip=true",           # Skip SpotBugs
+            "-Denforcer.skip=true",           # Skip enforcer rules
+            "-Djacoco.skip=true",             # Skip code coverage
+            "-Derrorprone.skip=true",         # Skip Google errorprone checks
+            "-Dspotless.skip=true",           # Skip spotless formatting
+            "-Dlicense.skip=true",            # Skip license checks
+            "-Dforbiddenapis.skip=true",      # Skip forbidden APIs check
+            "-Danimal.sniffer.skip=true",     # Skip animal sniffer
+            "-Dmaven.compiler.failOnError=false",   # Don't fail on compilation errors
+            "-Dmaven.compiler.failOnWarning=false", # Don't fail on warnings
+            "-Dorg.slf4j.simpleLogger.log.org.apache.maven.plugins.dependency=WARN",  # Reduce dependency noise
+        ]
+    
     def _validate_project(self) -> None:
         """Validate that this is a Maven project."""
         if not (self.project_path / "pom.xml").exists():
@@ -36,24 +57,9 @@ class MavenBuildSystem(BuildSystem):
         command = [
             "mvn", "clean", "install", 
             "-DskipTests=true",                   # Don't run tests, just build and install
-            "-Drat.skip=true",                    # Skip Apache RAT checks
-            "-Dmaven.javadoc.skip=true",          # Skip javadoc generation  
-            "-Dcheckstyle.skip=true",             # Skip checkstyle
-            "-Dpmd.skip=true",                    # Skip PMD
-            "-Dspotbugs.skip=true",               # Skip SpotBugs
-            "-Denforcer.skip=true",               # Skip enforcer rules
-            "-Djacoco.skip=true",                 # Skip code coverage
-            "-Dossindex.skip=true",               # Skip ossindex security audit
-            "-Derrorprone.skip=true",             # Skip Google errorprone checks
-            "-Dspotless.skip=true",               # Skip spotless formatting
-            "-Dlicense.skip=true",                # Skip license checks
-            "-Dforbiddenapis.skip=true",          # Skip forbidden APIs check
-            "-Danimal.sniffer.skip=true",         # Skip animal sniffer
-            "-Dmaven.compiler.failOnError=false", # Don't fail on compilation errors
-            "-Dmaven.compiler.failOnWarning=false", # Don't fail on warnings
             "-T", "1C",                           # Use 1 thread per CPU core for faster builds
             "-q"                                  # Quiet mode to reduce output noise
-        ]
+        ] + self._get_security_skip_params()
         
         # Check if this is a Struts project that might have assembly issues
         # Skip assembly module for Struts projects to avoid wget dependency
@@ -153,17 +159,8 @@ class MavenBuildSystem(BuildSystem):
             f"-Dtest={test_spec}", 
             "-DfailIfNoTests=false",
             "-Dmaven.test.failure.ignore=true",
-            "-Drat.skip=true",
-            "-Dossindex.skip=true",
-            "-Derrorprone.skip=true",
-            "-Dspotless.skip=true",
-            "-Dlicense.skip=true",
-            "-Dforbiddenapis.skip=true",
-            "-Danimal.sniffer.skip=true",
-            "-Dmaven.compiler.failOnError=false",
-            "-Dmaven.compiler.failOnWarning=false",
             "-DargLine="  # Define empty argLine to prevent undefined variable errors
-        ]
+        ] + self._get_security_skip_params()
         
         if debug_logger.isEnabledFor(logging.DEBUG):
             debug_logger.debug(f"Using Maven test command in {working_dir}: {' '.join(command)}")
@@ -323,8 +320,9 @@ class MavenBuildSystem(BuildSystem):
         
         try:
             # Quick dependency check without downloading
+            command = ["mvn", "dependency:resolve-sources", "-q", "-DsilenceWarnings=true"] + self._get_security_skip_params()
             result = subprocess.run(
-                ["mvn", "dependency:resolve-sources", "-q", "-DsilenceWarnings=true"],
+                command,
                 cwd=self.project_path,
                 capture_output=True,
                 text=True,
@@ -360,7 +358,7 @@ class MavenBuildSystem(BuildSystem):
             "-DskipTests=true", 
             "-Dmaven.test.skip.exec=true",
             "-T", "1C"  # Use parallel compilation
-        ]
+        ] + self._get_security_skip_params()
         
         # Add Struts-specific flags if needed
         project_name = self.project_path.name.lower()
@@ -434,11 +432,8 @@ class MavenBuildSystem(BuildSystem):
                 
                 command = [
                     "mvn", "test-compile", "-q",
-                    "-DskipTests=true",
-                    "-Drat.skip=true",  # Skip Apache RAT license check
-                    "-Dcheckstyle.skip=true",  # Skip Checkstyle validation
-                    "-Dmaven.javadoc.skip=true"  # Skip JavaDoc generation
-                ] + module_args
+                    "-DskipTests=true"
+                ] + self._get_security_skip_params() + module_args
                 
                 # Add project-specific flags
                 project_name = self.project_path.name.lower()

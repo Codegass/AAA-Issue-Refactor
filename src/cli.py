@@ -1011,7 +1011,7 @@ def show_refactored_phase(java_project_path: Path, output_path: Path, debug_mode
             backup_mgr.restore_file(test_file_path)
     
     logger.info(f"\n✓ Review-friendly code generation completed!")
-    logger.info("📝 Students can now review the refactored methods in the Java test files.")
+    logger.info("📝 User can now review the refactored methods in the Java test files.")
     logger.info("💡 Use --keep-rf-in-project to prevent automatic restoration of original files.")
     logger.info("🔄 To restore original files, use git checkout or backup files.")
 

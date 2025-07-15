@@ -500,3 +500,60 @@ v1_aaa_review_fix_issue_or_not,v1_aaa_review_why_fail
 3. **For each test case**, review the refactored code column
 4. **Fill in the review columns** based on code quality and correctness
 5. **Use the data** for grading, feedback, or research analysis
+
+## Troubleshooting
+
+### Common Build Issues
+
+#### Maven Security Audit Failures (CVE Issues)
+
+If you encounter Maven build failures due to `ossindex-maven-plugin` security audits (like CVE-2025-48924), the tool automatically skips these checks during testing. However, if you still encounter issues:
+
+**Error Example:**
+```
+[ERROR] Failed to execute goal org.sonatype.ossindex.maven:ossindex-maven-plugin:3.2.0:audit
+[ERROR] Detected 1 vulnerable components:
+[ERROR]   org.apache.commons:commons-lang3:jar:3.17.0
+[ERROR]     * [CVE-2025-48924] CWE-674: Uncontrolled Recursion
+```
+
+**Solutions:**
+
+1. **Automatic Fix (Default)**: The tool already includes `-Dossindex.skip=true` in all Maven commands to skip security audits during testing.
+
+2. **Manual Override**: If needed, you can temporarily disable security audits in your project's `pom.xml`:
+   ```xml
+   <properties>
+       <ossindex.skip>true</ossindex.skip>
+   </properties>
+   ```
+
+3. **Alternative**: Use Maven profiles to skip security checks during testing:
+   ```bash
+   mvn test -Pno-security-checks
+   ```
+
+4. **IDE-Based Execution**: Run tests directly from your IDE (IntelliJ IDEA, Eclipse) which typically bypasses Maven plugins.
+
+#### Other Common Issues
+
+##### Compilation Timeout
+- **Symptom**: Maven compilation times out
+- **Solution**: Increase timeout or use `--skip-initial-build` if project is already compiled
+
+##### Module Not Found
+- **Symptom**: Cannot find test modules in multi-module projects
+- **Solution**: Ensure project is fully built using `mvn clean install`
+
+##### Import Resolution Issues
+- **Symptom**: Missing imports for Hamcrest, JUnit, etc.
+- **Solution**: Tool automatically detects and adds dependencies; check your IDE's Maven import
+
+### Getting Help
+
+If you encounter issues not covered here:
+
+1. Run with `--debug` flag for detailed output
+2. Check the log files in the output directory
+3. Ensure your project builds successfully outside the tool first
+4. For security audit issues, verify the tool is using the latest version with skip parameters

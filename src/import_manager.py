@@ -713,6 +713,36 @@ class SmartImportManager:
             logger.debug(f"Filtering out import without class name: {cleaned}")
             return ""
         
+        # CRITICAL: Filter out invalid static imports for annotations and classes that should not be static
+        if cleaned.startswith('static '):
+            static_part = cleaned[7:]  # Remove 'static ' prefix
+            
+            # Check for imports that should NEVER be static imports
+            invalid_static_patterns = [
+                r'org\.junit\.jupiter\.api\.Test$',      # @Test annotation 
+                r'org\.junit\.Test$',                    # @Test annotation (JUnit 4)
+                r'org\.junit\..*\.Before$',              # @Before annotation
+                r'org\.junit\..*\.After$',               # @After annotation
+                r'org\.junit\..*\.BeforeEach$',          # @BeforeEach annotation
+                r'org\.junit\..*\.AfterEach$',           # @AfterEach annotation
+                r'org\.junit\..*\.BeforeAll$',           # @BeforeAll annotation
+                r'org\.junit\..*\.AfterAll$',            # @AfterAll annotation
+                r'org\.junit\..*\.ParameterizedTest$',   # @ParameterizedTest annotation
+                r'org\.junit\..*\.TestInstance$',        # @TestInstance annotation
+                r'org\.junit\..*\.TestMethodOrder$',     # @TestMethodOrder annotation
+                r'org\.junit\..*\.DisplayName$',         # @DisplayName annotation
+                r'org\.junit\..*\.Disabled$',            # @Disabled annotation
+                r'org\.junit\..*\.Tag$',                 # @Tag annotation
+                r'.*\.Test$',                            # Any Test annotation
+                r'.*\.Before$',                          # Any Before annotation
+                r'.*\.After$',                           # Any After annotation
+            ]
+            
+            for pattern in invalid_static_patterns:
+                if re.match(pattern, static_part):
+                    logger.debug(f"Filtering out invalid static import for annotation/class: {cleaned}")
+                    return ""
+        
         # Validate production imports if test file content is available
         if test_file_content:
             production_analysis = self.analyze_production_imports([cleaned], test_file_content)
@@ -728,7 +758,7 @@ class SmartImportManager:
         # and the second-to-last segment starts with an uppercase letter (a class).
         match = re.match(r'^(.*\.[A-Z][a-zA-Z0-9_]*)\.([a-z][a-zA-Z0-9_]*)$', cleaned)
         if match and not cleaned.startswith('static '):
-            class_path, _ = match.groups()
+            class_path, method_name = match.groups()
             
             # Whitelist of classes we know provide static methods for testing
             known_static_providers = [
@@ -747,7 +777,7 @@ class SmartImportManager:
     def _is_import_satisfied(self, required_import: str, existing_imports: Set[str]) -> bool:
         """
         Check if a required import is already satisfied by existing imports.
-        This handles direct matches, wildcard matches, and malformed static imports.
+        This handles direct matches, wildcard matches, class vs static imports, and malformed static imports.
         
         Args:
             required_import: The import we need (e.g., "static org.junit.jupiter.api.Assertions.assertEquals")
@@ -767,11 +797,26 @@ class SmartImportManager:
             if self._normalize_import(normalized_existing) == self._normalize_import(normalized_required):
                 return True
         
-        # 2. Wildcard match check
-        # For static imports, check for class-level wildcards (e.g., import static org.junit.Assert.*;)
+        # 2. For static imports, check if a class-level import already exists
+        # This handles cases where we try to add "static org.junit.jupiter.api.Test" 
+        # when "org.junit.jupiter.api.Test" already exists
         if 'static' in normalized_required:
-            # Extract class path from the static import: "import static com.package.MyClass.myMethod;" -> "com.package.MyClass"
-            import_parts = normalized_required.replace('import static ', '').replace(';', '').strip().split('.')
+            static_import_part = normalized_required.replace('import static ', '').replace(';', '').strip()
+            
+            # Extract the class part (before the last dot, if it exists)
+            if '.' in static_import_part:
+                class_part = '.'.join(static_import_part.split('.')[:-1])
+                class_import = f"import {class_part};"
+                
+                # Check if this class is already imported (non-static)
+                for existing in existing_imports:
+                    normalized_existing = self._format_import_statement(existing)
+                    if self._normalize_import(normalized_existing) == self._normalize_import(class_import):
+                        logger.debug(f"Static import {required_import} satisfied by existing class import: {existing}")
+                        return True
+            
+            # Check for class-level wildcards (e.g., import static org.junit.Assert.*;)
+            import_parts = static_import_part.split('.')
             if len(import_parts) > 1:
                 class_path = '.'.join(import_parts[:-1])
                 wildcard_import = f"import static {class_path}.*;"
@@ -781,7 +826,7 @@ class SmartImportManager:
                     if self._normalize_import(normalized_existing) == self._normalize_import(wildcard_import):
                         return True
 
-        # For regular class imports, check for package-level wildcards (e.g., import java.util.*;)
+        # 3. For regular class imports, check for package-level wildcards (e.g., import java.util.*;)
         else:
             # Extract package name: "import java.util.List;" -> "java.util"
             import_content = normalized_required.replace('import ', '').replace(';', '').strip()
