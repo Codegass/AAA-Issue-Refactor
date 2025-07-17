@@ -1017,9 +1017,21 @@ def show_refactored_phase(java_project_path: Path, output_path: Path, debug_mode
 
 
 def clean_refactored_phase(java_project_path: Path, debug_mode: bool = False) -> None:
-    """Clean up all refactored code from Java files using git checkout."""
-    logger.info("\nClean Refactored Code")
+    """Clean up all refactored code and dependency changes using git checkout and backup restoration."""
+    logger.info("\nClean Refactored Code and Dependencies")
     logger.info("=" * 50)
+    
+    # First, clean up any dependency changes using DependencyManager
+    logger.info("Cleaning up dependency changes...")
+    try:
+        from .validator import CodeValidator
+        validator = CodeValidator(java_project_path)
+        validator.cleanup_dependency_changes()
+        logger.info("✓ Dependency changes cleaned up using backup restoration")
+    except Exception as e:
+        logger.warning(f"⚠ Could not clean dependency changes: {e}")
+        if debug_mode:
+            logger.debug("Error details:", exc_info=True)
     
     try:
         import subprocess
@@ -1035,12 +1047,13 @@ def clean_refactored_phase(java_project_path: Path, debug_mode: bool = False) ->
         
         if result.returncode != 0:
             logger.error(f"Java project is not a git repository: {java_project_path}")
-            logger.error("Cannot clean refactored code without git. Please manually restore files.")
+            logger.info("Attempting to restore remaining files from backup files...")
+            _restore_from_backups_only(java_project_path, debug_mode)
             return
         
-        # Check git status for modified files
+        # Check git status for ALL modified files (not just Java)
         result = subprocess.run(
-            ["git", "status", "--porcelain", "--", "*.java"],
+            ["git", "status", "--porcelain"],
             cwd=java_project_path,
             capture_output=True,
             text=True,
@@ -1051,42 +1064,65 @@ def clean_refactored_phase(java_project_path: Path, debug_mode: bool = False) ->
             logger.error(f"Failed to check git status: {result.stderr}")
             return
         
-        modified_files = []
+        # Separate different types of modified files
+        java_files = []
+        build_files = []
+        other_files = []
+        
         for line in result.stdout.strip().split('\n'):
             if line.strip() and (line.startswith(' M') or line.startswith('M ')):
-                # Extract filename from git status output
                 filename = line[2:].strip()
                 if filename.endswith('.java'):
-                    modified_files.append(filename)
+                    java_files.append(filename)
+                elif filename.endswith(('.xml', '.gradle', '.gradle.kts')):
+                    build_files.append(filename)
+                else:
+                    other_files.append(filename)
         
-        if not modified_files:
-            logger.info("✓ No modified Java files found. Project is already clean.")
+        total_files = len(java_files) + len(build_files) + len(other_files)
+        
+        if total_files == 0:
+            logger.info("✓ No modified files found. Project is already clean.")
+            # Still check for backup files to clean up
+            _restore_from_backups_only(java_project_path, debug_mode)
             return
         
-        logger.info(f"Found {len(modified_files)} modified Java files:")
-        for file in modified_files:
-            logger.info(f"  - {file}")
+        logger.info(f"Found {total_files} modified files:")
+        if java_files:
+            logger.info(f"  Java files ({len(java_files)}): {', '.join(java_files[:3])}" + 
+                       ("..." if len(java_files) > 3 else ""))
+        if build_files:
+            logger.info(f"  Build files ({len(build_files)}): {', '.join(build_files[:3])}" + 
+                       ("..." if len(build_files) > 3 else ""))
+        if other_files:
+            logger.info(f"  Other files ({len(other_files)}): {', '.join(other_files[:3])}" + 
+                       ("..." if len(other_files) > 3 else ""))
         
-        # Use git checkout to restore all modified Java files
-        logger.info("Restoring Java files to their original state...")
+        all_modified_files = java_files + build_files + other_files
+        
+        # Use git checkout to restore all modified files
+        logger.info("Restoring all modified files to their original state...")
         result = subprocess.run(
-            ["git", "checkout", "HEAD", "--"] + modified_files,
+            ["git", "checkout", "HEAD", "--"] + all_modified_files,
             cwd=java_project_path,
             capture_output=True,
             text=True,
-            timeout=60
+            timeout=120
         )
         
         if result.returncode != 0:
-            logger.error(f"Failed to restore files: {result.stderr}")
-            return
-        
-        logger.info(f"✓ Successfully restored {len(modified_files)} Java files to their original state.")
+            logger.warning(f"Git checkout had issues: {result.stderr}")
+            logger.info("Attempting to restore from backup files as fallback...")
+            _restore_from_backups_only(java_project_path, debug_mode)
+        else:
+            logger.info(f"✓ Successfully restored {total_files} files using git checkout.")
+            # Also restore any backup files (for files that weren't tracked by git)
+            _restore_from_backups_only(java_project_path, debug_mode)
         
         if debug_mode:
             # Show final git status
             result = subprocess.run(
-                ["git", "status", "--porcelain", "--", "*.java"],
+                ["git", "status", "--porcelain"],
                 cwd=java_project_path,
                 capture_output=True,
                 text=True,
@@ -1096,13 +1132,72 @@ def clean_refactored_phase(java_project_path: Path, debug_mode: bool = False) ->
             if remaining_modified:
                 logger.debug(f"Remaining modified files: {remaining_modified}")
             else:
-                logger.debug("All Java files have been restored.")
+                logger.debug("All files have been restored.")
         
     except subprocess.TimeoutExpired:
-        logger.error("Git command timeout. Please manually restore Java files.")
+        logger.error("Git command timeout. Attempting backup restoration as fallback...")
+        _restore_from_backups_only(java_project_path, debug_mode)
     except Exception as e:
         logger.error(f"Error during cleanup: {str(e)}", exc_info=debug_mode)
-        logger.error("Please manually restore Java files using 'git checkout HEAD -- *.java'")
+        logger.error("Attempting backup restoration as fallback...")
+        _restore_from_backups_only(java_project_path, debug_mode)
+
+
+def _restore_from_backups_only(java_project_path: Path, debug_mode: bool = False) -> None:
+    """Restore files from .aif_backup files when git is not available or failed."""
+    logger.info("Looking for backup files to restore...")
+    
+    # Find all .aif_backup files in the project
+    backup_files = list(java_project_path.glob("**/*.aif_backup"))
+    
+    if not backup_files:
+        logger.info("✓ No backup files found to restore.")
+        return
+    
+    logger.info(f"Found {len(backup_files)} backup files to restore:")
+    
+    restored_files = []
+    failed_files = []
+    
+    for backup_file in backup_files:
+        try:
+            # Determine original file path by removing .aif_backup extension
+            original_file = backup_file.with_suffix('')
+            
+            # Handle cases where the extension was doubled (e.g., .xml.aif_backup)
+            if original_file.suffix == '.aif_backup':
+                original_file = original_file.with_suffix('')
+            
+            relative_backup = backup_file.relative_to(java_project_path)
+            relative_original = original_file.relative_to(java_project_path)
+            
+            logger.info(f"  Restoring: {relative_original}")
+            
+            # Copy backup content to original file
+            backup_content = backup_file.read_text(encoding='utf-8')
+            original_file.write_text(backup_content, encoding='utf-8')
+            
+            # Remove backup file
+            backup_file.unlink()
+            
+            restored_files.append(str(relative_original))
+            
+        except Exception as e:
+            logger.error(f"Failed to restore {backup_file}: {e}")
+            failed_files.append(str(backup_file.relative_to(java_project_path)))
+    
+    if restored_files:
+        logger.info(f"✓ Successfully restored {len(restored_files)} files from backups:")
+        for file in restored_files:
+            logger.info(f"    - {file}")
+    
+    if failed_files:
+        logger.warning(f"⚠ Failed to restore {len(failed_files)} backup files:")
+        for file in failed_files:
+            logger.warning(f"    - {file}")
+    
+    if not restored_files and not failed_files:
+        logger.info("✓ No backup files needed restoration.")
 
 
 def pit_test_phase(java_project_path: Path, output_path: Path, rftype: str, 

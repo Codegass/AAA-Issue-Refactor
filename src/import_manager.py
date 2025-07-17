@@ -319,13 +319,46 @@ class SmartImportManager:
         requirements = []
         existing_imports = existing_imports or set()
         
-        # Select appropriate JUnit imports based on version
-        if self.junit_version == "5":
-            junit_imports = self.JUNIT5_STATIC_IMPORTS
-            junit_assumptions = self.JUNIT5_ASSUMPTIONS
+        # CRITICAL: Detect JUnit version conflicts in existing imports
+        junit_conflict_info = self._detect_junit_version_conflicts(existing_imports)
+        
+        # Select appropriate JUnit imports based on version and conflict detection
+        if junit_conflict_info['has_conflict']:
+            # In case of conflict, prioritize the detected project version but warn user
+            logger.warning(f"JUnit version conflict detected in existing imports!")
+            logger.warning(f"Project JUnit version: {self.junit_version}")
+            logger.warning(f"Existing JUnit 4 imports: {junit_conflict_info['junit4_imports']}")
+            logger.warning(f"Existing JUnit 5 imports: {junit_conflict_info['junit5_imports']}")
+            
+            # Use the project's detected version but add a warning comment to imports
+            if self.junit_version == "5":
+                junit_imports = self.JUNIT5_STATIC_IMPORTS
+                junit_assumptions = self.JUNIT5_ASSUMPTIONS
+                logger.warning("Using JUnit 5 imports to match project configuration. Consider removing JUnit 4 imports.")
+            else:
+                junit_imports = self.JUNIT4_STATIC_IMPORTS
+                junit_assumptions = self.JUNIT4_ASSUMPTIONS
+                logger.warning("Using JUnit 4 imports to match project configuration. Consider upgrading to JUnit 5.")
         else:
-            junit_imports = self.JUNIT4_STATIC_IMPORTS
-            junit_assumptions = self.JUNIT4_ASSUMPTIONS
+            # No conflict detected, use normal logic
+            if junit_conflict_info['existing_junit_version']:
+                # Use the version found in existing imports (more reliable than project detection)
+                if junit_conflict_info['existing_junit_version'] == "5":
+                    junit_imports = self.JUNIT5_STATIC_IMPORTS
+                    junit_assumptions = self.JUNIT5_ASSUMPTIONS
+                    logger.debug("Using JUnit 5 imports based on existing imports")
+                else:
+                    junit_imports = self.JUNIT4_STATIC_IMPORTS
+                    junit_assumptions = self.JUNIT4_ASSUMPTIONS
+                    logger.debug("Using JUnit 4 imports based on existing imports")
+            else:
+                # Fall back to project detection
+                if self.junit_version == "5":
+                    junit_imports = self.JUNIT5_STATIC_IMPORTS
+                    junit_assumptions = self.JUNIT5_ASSUMPTIONS
+                else:
+                    junit_imports = self.JUNIT4_STATIC_IMPORTS
+                    junit_assumptions = self.JUNIT4_ASSUMPTIONS
         
         # Check for JUnit assertions
         for pattern, import_class in junit_imports.items():
@@ -333,13 +366,17 @@ class SmartImportManager:
                 static_import = f"static {import_class}"
                 pattern_clean = pattern.strip('\\b')
                 
-                # Check if this import is already satisfied
+                # Check if this import is already satisfied or conflicts
                 if not self._is_import_satisfied(static_import, existing_imports):
-                    requirements.append(ImportRequirement(
-                        import_statement=static_import,
-                        reason=f"Code uses {pattern_clean} assertion",
-                        priority=1
-                    ))
+                    # Additional check: avoid adding conflicting JUnit versions
+                    if not self._would_create_junit_conflict(static_import, existing_imports):
+                        requirements.append(ImportRequirement(
+                            import_statement=static_import,
+                            reason=f"Code uses {pattern_clean} assertion",
+                            priority=1
+                        ))
+                    else:
+                        logger.warning(f"Skipping {static_import} to avoid JUnit version conflict")
         
         # Check for JUnit assumptions
         for pattern, import_class in junit_assumptions.items():
@@ -348,21 +385,27 @@ class SmartImportManager:
                     # Uses qualified name, need class import
                     class_import = import_class.rsplit('.', 1)[0]
                     if not self._is_import_satisfied(class_import, existing_imports):
-                        requirements.append(ImportRequirement(
-                            import_statement=class_import,
-                            reason=f"Code uses qualified {class_import.split('.')[-1]}",
-                            priority=1
-                        ))
+                        if not self._would_create_junit_conflict(class_import, existing_imports):
+                            requirements.append(ImportRequirement(
+                                import_statement=class_import,
+                                reason=f"Code uses qualified {class_import.split('.')[-1]}",
+                                priority=1
+                            ))
+                        else:
+                            logger.warning(f"Skipping {class_import} to avoid JUnit version conflict")
                 else:
                     # Uses static import
                     static_import = f"static {import_class}"
                     pattern_clean = pattern.strip('\\b')
                     if not self._is_import_satisfied(static_import, existing_imports):
-                        requirements.append(ImportRequirement(
-                            import_statement=static_import,
-                            reason=f"Code uses {pattern_clean} assumption",
-                            priority=1
-                        ))
+                        if not self._would_create_junit_conflict(static_import, existing_imports):
+                            requirements.append(ImportRequirement(
+                                import_statement=static_import,
+                                reason=f"Code uses {pattern_clean} assumption",
+                                priority=1
+                            ))
+                        else:
+                            logger.warning(f"Skipping {static_import} to avoid JUnit version conflict")
         
         # Check for Hamcrest matchers with version-specific handling
         hamcrest_requirements = self._analyze_hamcrest_requirements(code, existing_imports)
@@ -389,6 +432,97 @@ class SmartImportManager:
                 unique_requirements[req.import_statement] = req
         
         return sorted(unique_requirements.values(), key=lambda x: x.priority)
+    
+    def _detect_junit_version_conflicts(self, existing_imports: Set[str]) -> Dict[str, Any]:
+        """
+        Detect JUnit version conflicts in existing imports.
+        
+        Returns:
+            Dictionary with conflict information
+        """
+        junit4_imports = []
+        junit5_imports = []
+        
+        for import_stmt in existing_imports:
+            # Clean up the import statement for analysis
+            clean_import = import_stmt.replace('import ', '').replace('static ', '').replace(';', '').strip()
+            
+            if 'org.junit.jupiter' in clean_import:
+                junit5_imports.append(import_stmt)
+            elif ('org.junit.Test' in clean_import or 
+                  'org.junit.Assert' in clean_import or 
+                  'org.junit.Before' in clean_import or 
+                  'org.junit.After' in clean_import or
+                  'org.junit.Assume' in clean_import or
+                  'org.junit.Rule' in clean_import):
+                # Only count as JUnit 4 if it's not Jupiter (to avoid false positives)
+                if 'jupiter' not in clean_import:
+                    junit4_imports.append(import_stmt)
+        
+        has_conflict = len(junit4_imports) > 0 and len(junit5_imports) > 0
+        
+        # Determine existing JUnit version based on imports (most reliable)
+        existing_junit_version = None
+        if junit5_imports and not junit4_imports:
+            existing_junit_version = "5"
+        elif junit4_imports and not junit5_imports:
+            existing_junit_version = "4"
+        # If both exist, we have a conflict, don't set a version
+        
+        return {
+            'has_conflict': has_conflict,
+            'junit4_imports': junit4_imports,
+            'junit5_imports': junit5_imports,
+            'existing_junit_version': existing_junit_version
+        }
+    
+    def _would_create_junit_conflict(self, proposed_import: str, existing_imports: Set[str]) -> bool:
+        """
+        Check if adding the proposed import would create a JUnit version conflict.
+        
+        Args:
+            proposed_import: The import we want to add
+            existing_imports: Current imports in the file
+            
+        Returns:
+            True if adding this import would create a conflict
+        """
+        # Clean up the proposed import for analysis
+        clean_proposed = proposed_import.replace('import ', '').replace('static ', '').replace(';', '').strip()
+        
+        # Determine proposed import's JUnit version
+        proposed_junit_version = None
+        if 'org.junit.jupiter' in clean_proposed:
+            proposed_junit_version = "5"
+        elif ('org.junit.Test' in clean_proposed or 
+              'org.junit.Assert' in clean_proposed or 
+              'org.junit.Before' in clean_proposed or 
+              'org.junit.After' in clean_proposed or
+              'org.junit.Assume' in clean_proposed):
+            proposed_junit_version = "4"
+        
+        if not proposed_junit_version:
+            return False  # Not a JUnit import, no conflict possible
+        
+        # Check existing imports for opposite version
+        for import_stmt in existing_imports:
+            clean_existing = import_stmt.replace('import ', '').replace('static ', '').replace(';', '').strip()
+            
+            if proposed_junit_version == "5":
+                # Proposing JUnit 5, check for existing JUnit 4
+                if (('org.junit.Test' in clean_existing or 
+                     'org.junit.Assert' in clean_existing or 
+                     'org.junit.Before' in clean_existing or 
+                     'org.junit.After' in clean_existing or
+                     'org.junit.Assume' in clean_existing) and 
+                    'jupiter' not in clean_existing):
+                    return True
+            else:
+                # Proposing JUnit 4, check for existing JUnit 5
+                if 'org.junit.jupiter' in clean_existing:
+                    return True
+        
+        return False
     
     def _analyze_hamcrest_requirements(self, code: str, existing_imports: Set[str]) -> List[ImportRequirement]:
         """Analyze Hamcrest requirements with version-specific handling."""
