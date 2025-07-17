@@ -411,9 +411,11 @@ class SmartImportManager:
         hamcrest_requirements = self._analyze_hamcrest_requirements(code, existing_imports)
         requirements.extend(hamcrest_requirements)
         
-        # Check for Mockito static imports (fix the static import format issue)
-        mockito_requirements = self._analyze_mockito_requirements(code, existing_imports)
-        requirements.extend(mockito_requirements)
+        # DISABLED: Check for Mockito static imports 
+        # Reason: Risk of conflicts with PowerMock, custom mock tools, or similar-named user methods
+        # Users should manually specify mock-related imports if needed
+        # mockito_requirements = self._analyze_mockito_requirements(code, existing_imports)
+        # requirements.extend(mockito_requirements)
         
         # Check for Java utility imports
         for pattern, import_class in self.JAVA_UTIL_IMPORTS.items():
@@ -1072,14 +1074,15 @@ class SmartImportManager:
         
         # Group imports by dependency type
         hamcrest_imports = []
-        mockito_imports = []
+        # DISABLED: mockito_imports = []
         
         for imp in imports:
             imp_lower = imp.lower()
             if any(hamcrest_pkg in imp_lower for hamcrest_pkg in ['hamcrest']):
                 hamcrest_imports.append(imp)
-            elif any(mockito_pkg in imp_lower for mockito_pkg in ['mockito']):
-                mockito_imports.append(imp)
+            # DISABLED: Mockito detection to avoid conflicts with PowerMock or custom mock tools
+            # elif any(mockito_pkg in imp_lower for mockito_pkg in ['mockito']):
+            #     mockito_imports.append(imp)
         
         # Add dependency requirements
         if hamcrest_imports:
@@ -1089,12 +1092,13 @@ class SmartImportManager:
                 'reason': f'Code uses {len(hamcrest_imports)} Hamcrest imports'
             })
         
-        if mockito_imports:
-            dependencies.append({
-                'type': 'mockito',
-                'imports': mockito_imports,
-                'reason': f'Code uses {len(mockito_imports)} Mockito imports'
-            })
+        # DISABLED: Mockito dependency detection to avoid conflicts
+        # if mockito_imports:
+        #     dependencies.append({
+        #         'type': 'mockito',
+        #         'imports': mockito_imports,
+        #         'reason': f'Code uses {len(mockito_imports)} Mockito imports'
+        #     })
         
         return dependencies
 
