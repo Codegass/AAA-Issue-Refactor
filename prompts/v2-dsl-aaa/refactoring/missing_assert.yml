@@ -1,17 +1,14 @@
 SmellType: Missing Assert
 Description: A test method performs an action (the Act) but lacks any assertions to verify the outcome. A test without assertions is not a real test, as it cannot fail.
 Variables:
-  TargetMethodName: The name of the method being tested (the 'Act' part).
-  ReturnValue: The object or value returned by the target method.
-  StateChangingObject: The object whose state is modified by the 'Act'.
-  TestType: Whether this is a positive test (expecting success) or negative test (expecting failure/exception).
+  TestType: Stores whether the test should be treated as positive (expecting success) or negative (expecting an exception) for later steps.
 Steps:
   - Description: Identify the primary 'Act' of the test, which is the method call that changes state or produces a result.
     Action: IdentifyAction
     Parameters:
       SourcePattern: Find the main method invocation that is not part of the setup.
   
-  - Description: Determine if this is a positive or negative test based on method name, context, and expected behavior.
+  - Description: Determine if this is a positive or negative test based on method name, context, and expected behavior, and capture the classification in `TestType` for later use.
     Action: AnalyzeTestType
     Parameters:
       PositiveIndicators: Method names like 'test*', 'should*Work', 'verify*Success', regular business logic calls without error handling
@@ -28,9 +25,10 @@ Steps:
         4. What state changes can be observed and verified?
         5. Are there any required imports for the assertion methods to be used?
   
-  - Description: Add appropriate assertions based on test type. CRITICAL - Most tests are positive tests expecting normal execution without exceptions.
+  - Description: Add appropriate assertions based on `TestType`. CRITICAL - Most tests are positive tests expecting normal execution without exceptions.
     Action: AddAssertion
     Parameters:
+      TestType: "{TestType}"
       TargetMethod: The original test method.
       CompilationSafety: |
         MANDATORY REQUIREMENTS for assertion code:
